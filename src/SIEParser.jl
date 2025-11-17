@@ -1,5 +1,9 @@
 module SIEParser
 
-# Write your package code here.
+using EzXML
+
+include("parseSIEKerchoo.jl")
+
+export parseSIE
 
 end
