@@ -278,5 +278,3 @@ function crc32(data::Vector{UInt8})
     end
     crc ⊻ 0xffffffff
 end
-
-#ch = sieparsek("$(@__DIR__)/../SIE/Sensor 2 of 11 - FAILURE.sie")
