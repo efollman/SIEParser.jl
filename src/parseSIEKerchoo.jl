@@ -38,7 +38,7 @@ function parseSIE(siepath::String)
         else
             sieData2[nkey]["sampleN"] = NaN
         end
-        if haskey(sieData[key],"sample_rate")
+        if haskey(sieData[key]["dimtags"][1],"core:label")
             sieData2[nkey]["timelabel"] = sieData[key]["dimtags"][1]["core:label"]
         else
             sieData2[nkey]["timelabel"] = ""
@@ -53,7 +53,7 @@ function parseSIE(siepath::String)
         else
             sieData2[nkey]["label"] = ""
         end
-        if haskey(sieData[key]["chtags"],"core:units")
+        if haskey(sieData[key]["dimtags"][2],"core:units")
             sieData2[nkey]["units"] = sieData[key]["dimtags"][2]["core:units"]
         else
             sieData2[nkey]["units"] = ""
@@ -278,5 +278,3 @@ function crc32(data::Vector{UInt8})
     end
     crc ⊻ 0xffffffff
 end
-
-#ch = sieparsek("$(@__DIR__)/../SIE/Sensor 2 of 11 - FAILURE.sie")
