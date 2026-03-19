@@ -2,9 +2,8 @@ module SIEParser
 
 using EzXML
 
-include("parseSIEKerchoo.jl")
+include("parseBinBlobTags.jl")
 
-export parseSIE 
-export parseSIEfull
+export parseSIEraw
 
 end
