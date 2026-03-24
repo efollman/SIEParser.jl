@@ -50,7 +50,7 @@ function parseSIEraw(siepath::String)
                         binDict[group[i]] = []
                     end
                     
-                    binDict[group[i]] = [binDict[group[i]];bitVec]
+                    binDict[group[i]] = [binDict[group[i]];bitVec[13:end]]
                         
                 end
             end
