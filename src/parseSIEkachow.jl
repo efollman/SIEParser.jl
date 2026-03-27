@@ -122,12 +122,14 @@ function combineRawAndClean(sieD,parsedRaw)
             end
         end
         for dim in dims
+            #vecType = typeparse(sieD[key]["tags"]["dim$(dim[2:end])"]["somat:data_format"]) Implement this for proper type pull
             sieD[key][dim] = []
         end
 
         for i in parsedRaw[key]
             for dim in dims
-                sieD[key][dim] = [sieD[key][dim];i[dim]]
+                vecType = typeof(i[dim])#should probably pull this from tags, will break 
+                sieD[key][dim] = vecType([sieD[key][dim];i[dim]])
             end
         end
 
@@ -135,6 +137,7 @@ function combineRawAndClean(sieD,parsedRaw)
             
             if haskey(sieD[key]["tags"]["dim$(dim[2:end])"],"xform")
                 if haskey(sieD[key]["tags"]["dim$(dim[2:end])"]["xform"],"scale")
+                    sieD[key][dim] = Vector{Float64}(sieD[key][dim]) # bodge
                     sieD[key][dim] .*= sieD[key]["tags"]["dim$(dim[2:end])"]["xform"]["scale"]
                 end
                 if haskey(sieD[key]["tags"]["dim$(dim[2:end])"]["xform"],"offset")
@@ -151,7 +154,7 @@ function combineRawAndClean(sieD,parsedRaw)
                 start = sieD[key]["v0"][1]
                 sr = sieD[key]["tags"]["core:sample_rate"]
                 len = length(sieD[key]["v1"])
-                sieD[key]["v0"] = start:(1/sr):(len-1+start)*(1/sr)
+                sieD[key]["v0"] = collect(start:(1/sr):(len-1+start)*(1/sr))
             end
         end
 
