@@ -29,7 +29,7 @@ function parseSIEraw(siepath::String)
                 i += 1;
             end
             xmlString = join(xmlData)*"</sie>";
-            binDict::Dict{UInt,Vector{UInt8}} = Dict()
+            binDict::Dict{UInt,Vector{Vector{UInt8}}} = Dict()
 
             for i in eachindex(group)
                 if group[i] >= 100
@@ -50,7 +50,7 @@ function parseSIEraw(siepath::String)
                         binDict[group[i]] = []
                     end
                     
-                    binDict[group[i]] = [binDict[group[i]];bitVec[13:end]]
+                    push!(binDict[group[i]],bitVec[13:end])
                         
                 end
             end
