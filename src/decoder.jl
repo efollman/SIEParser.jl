@@ -96,11 +96,13 @@ function parseDecoderAsExpr(node::EzXML.Node)
         q = quote 
             for str in $vStrVec
                 if isUpdated[str]
-                    push!(dimD[str],vars[str])   
+                    dimD[str][samplei] = vars[str]
                 end
                 isUpdated[str] = false
                 
+                
             end
+            samplei += 1
         end
         return q
     end
@@ -214,24 +216,13 @@ function parseDecoderAsExpr(node::EzXML.Node)
         end
     end
 
-    initQ = quote end
-
-    for str in vStrVec
-        initQ = quote 
-            $initQ
-            dimD[$str] = Vector{$(vType[str])}()
-        end
-    end
 
     decoderHash = hash(decoderq)
     funcName = Symbol("decoder$decoderHash")
 
     decoderq = quote
-        function $funcName(bin) #needs number for multiple
+        function $funcName(bin,dimD,samplei)
             pointer = 1
-            dimD::Dict{String,Any} = Dict()
-            
-            $initQ
 
             vars::Dict{String,Any} = Dict()
             isUpdated::Dict{String,Bool} = Dict()
@@ -239,9 +230,9 @@ function parseDecoderAsExpr(node::EzXML.Node)
 
             $decoderq
 
-            return dimD
+            return dimD, samplei
         end
     end
     
-    return decoderq
+    return decoderq, vType
 end

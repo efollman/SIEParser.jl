@@ -5,25 +5,50 @@ function parseSIE(siepath::String)
     xmlS, binD = parseSIEraw(siepath)
 
     xmlDoc = parsexml(xmlS)
-    nodes = elements(xmlDoc.root)
+    
 
-    rawVoD, sieD = decodeRaw(nodes,binD)
+    sieD = decodeRaw(xmlDoc,binD)
 
-    sieD = combineRawAndClean(sieD,rawVoD) #Not completely finished
+    #sieD = combineRawAndClean(sieD,rawVoD) #Not completely finished
 
     return sieD
     
 end
 
-function recurTags!(dict::Dict,chNode::EzXML.Node)
+function recurTags!(dict::Dict,decD::Dict,chNode::EzXML.Node)
     for n in elements(chNode)
-        if n.name == "tag"
+        if n.name == "test"
+            if mytryparse(n["id"]) != 0
+                @warn "testid not zero probably need to fix something in sie parser"
+                continue
+            end
+            recurTags!(dict,decD,n)
+        elseif n.name == "ch" || n.name == "channel"
+            id = mytryparse(n["id"])
+            if !haskey(dict,id)
+                dict[id] = Dict()
+                dict[id]["tags"] = Dict()
+            end
+            for a in attributes(n)
+                if a.name == "test"
+                    if mytryparse(a.content) != 0
+                        @warn "testid not zero probably need to fix something in sie parser"
+                        continue
+                    end
+                end
+                dict[id]["tags"][a.name] = mytryparse(a.content)
+            end
+            
+            recurTags!(dict[id]["tags"],decD,n)
+        elseif n.name == "decoder"
+            decD[mytryparse(n["id"])] = n
+        elseif n.name == "tag"
             
             dict[attributes(n)[1].content] = mytryparse(n.content)
 
         elseif n.name == "dim"
             dict["dim$(n["index"])"] = Dict()
-            recurTags!(dict["dim$(n["index"])"],n)
+            recurTags!(dict["dim$(n["index"])"],decD,n)
         else
             dict[n.name] = Dict()
             for a in attributes(n)
@@ -31,7 +56,7 @@ function recurTags!(dict::Dict,chNode::EzXML.Node)
             end
         end
     end
-    return dict
+    return nothing
 end
 
 function mytryparse(val::String)
@@ -45,22 +70,16 @@ function mytryparse(val::String)
     return val
 end
 
-function decodeRaw(nodes,binD)
+function decodeRaw(doc,binD)
+    sieDN::Dict = Dict()
     sieD::Dict = Dict()
     decoderD::Dict = Dict()
 
-    for n in nodes
-        if n.name == "ch"
-            name = n["name"]
-            sieD[name] = Dict()
-            sieD[name]["tags"] = Dict()
-            for a in attributes(n)
-                sieD[name]["tags"][a.name] = mytryparse(a.content)
-            end
-            
-            recurTags!(sieD[name]["tags"],n)
-        elseif n.name == "decoder"
-            decoderD[mytryparse(n["id"])] = n
+    recurTags!(sieDN,decoderD,doc.root)
+
+    for nkey in keys(sieDN)
+        if isa(nkey,Real)
+            sieD[sieDN[nkey]["tags"]["name"]] = sieDN[nkey]
         end
     end
 
@@ -72,10 +91,12 @@ function decodeRaw(nodes,binD)
 
     decodeData::Dict = Dict()
     evalD::Dict = Dict()
-    parsedRaw::Dict{String,Vector{Dict}} = Dict()
+    typeD::Dict = Dict()
     for key in keys(decoderD)
-        evalD[key] = eval(parseDecoderAsExpr(decoderD[key]))
+        expr,typeD[key] = parseDecoderAsExpr(decoderD[key])
+        evalD[key] = eval(expr)
     end
+
     for key in keys(binD)
         chName = groupToName[key]
 
@@ -100,16 +121,28 @@ function decodeRaw(nodes,binD)
         end
         decID = lastID
 
-        outV = []
+        dimD = Dict()
+        for var in keys(typeD[decID])
+            if typeD[decID][var] == Vector{UInt8}
+                dimD[var] = fill(Vector{UInt8}([]),sieD[chName]["tags"]["SampleCount"])
+            else
+                dimD[var] = zeros(typeD[decID][var],sieD[chName]["tags"]["SampleCount"])
+            end
 
-        for bin in binD[key]
-            push!(outV, invokelatest(evalD[decID],bin))
         end
 
-        parsedRaw[chName] = outV
+        samplei = 1
+
+        for bin in binD[key]
+            (dimD, samplei) = invokelatest(evalD[decID],bin,dimD,samplei)
+        end
+
+        for key in keys(dimD)
+            sieD[chName][key] = dimD[key]
+        end
 
     end
-    return parsedRaw, sieD
+    return sieD
 end
 
 function combineRawAndClean(sieD,parsedRaw)

@@ -169,7 +169,7 @@ function oldparseSIEfull(siepath::String)
                             end
 
                             checksum::UInt32 = ntoh(read(io,UInt32))
-                            calc = crc32(bitVec)
+                            calc = oldcrc32(bitVec)
                             if (checksum != calc) && (checksum != 0)
                                 @warn "Checksum doesnt match"
                             end
@@ -194,7 +194,7 @@ function oldparseSIEfull(siepath::String)
 end
 
 
-function crc32(data::Vector{UInt8})
+function oldcrc32(data::Vector{UInt8})
     crc = 0xffffffff
     table = zeros(UInt32, 256)
     for i in 0:255
