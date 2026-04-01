@@ -145,26 +145,9 @@ function decodeRaw(doc,binD)
     return sieD
 end
 
-function combineRawAndClean(sieD,parsedRaw)
+function cleanSIE(sieD) #need to update with new changes
     for key in keys(parsedRaw)
-        dims = []
-        for dimkey in keys(sieD[key]["tags"])
-            if contains(dimkey,"dim")
-                push!(dims, "v$(sieD[key]["tags"][dimkey]["data"]["v"])")
-                
-            end
-        end
-        for dim in dims
-            #vecType = typeparse(sieD[key]["tags"]["dim$(dim[2:end])"]["somat:data_format"]) Implement this for proper type pull
-            sieD[key][dim] = []
-        end
-
-        for i in parsedRaw[key]
-            for dim in dims
-                vecType = typeof(i[dim])#should probably pull this from tags, will break 
-                sieD[key][dim] = vecType([sieD[key][dim];i[dim]])
-            end
-        end
+        
 
         for dim in dims
             
