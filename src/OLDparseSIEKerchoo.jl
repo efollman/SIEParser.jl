@@ -12,87 +12,23 @@
     (tree structure subject to change, trying to generalize to SIE tag structure more in future)
 =#
 
-function parseSIE(siepath::String)
-    sieData = parseSIEfull(siepath)
+function oldparseSIE(siepath::String)
+    sieData = oldparseSIEfull(siepath)
 
     sieData2::Dict{String,Dict{String,Any}} = Dict()
 
     for key in keys(sieData)
         nkey = sieData[key]["name"]
         sieData2[nkey] = Dict()
-        sieData2[nkey]["id"] =  sieData[key]["id"]
-        sieData2[nkey]["time"] = sieData[key]["data"][1]
-        sieData2[nkey]["data"] = sieData[key]["data"][2]
-        if haskey(sieData[key]["chtags"],"core:sample_rate")
-            sieData2[nkey]["sr"] = parse(Float64,sieData[key]["chtags"]["core:sample_rate"])
-        else
-            sieData2[nkey]["sr"] = NaN
-        end
-        if haskey(sieData[key],"dataType")
-            sieData2[nkey]["datatype"] = sieData[key]["dataType"]
-        else
-            sieData2[nkey]["datatype"] = ""
-        end
-        if haskey(sieData[key],"sampleN")
-            sieData2[nkey]["sampleN"] = sieData[key]["sampleN"]
-        else
-            sieData2[nkey]["sampleN"] = NaN
-        end
-        if haskey(sieData[key]["dimtags"][1],"core:label")
-            sieData2[nkey]["timelabel"] = sieData[key]["dimtags"][1]["core:label"]
-        else
-            sieData2[nkey]["timelabel"] = ""
-        end
-        if haskey(sieData[key]["dimtags"][1],"core:units")
-            sieData2[nkey]["timeunits"] = sieData[key]["dimtags"][1]["core:units"]
-        else
-            sieData2[nkey]["timeunits"] = ""
-        end
-        if haskey(sieData[key]["dimtags"][2],"core:label")
-            sieData2[nkey]["label"] = sieData[key]["dimtags"][2]["core:label"]
-        else
-            sieData2[nkey]["label"] = ""
-        end
-        if haskey(sieData[key]["dimtags"][2],"core:units")
-            sieData2[nkey]["units"] = sieData[key]["dimtags"][2]["core:units"]
-        else
-            sieData2[nkey]["units"] = ""
-        end
-        if haskey(sieData[key]["chtags"],"core:description")
-            sieData2[nkey]["description"] = sieData[key]["chtags"]["core:description"]
-        else
-            sieData2[nkey]["description"] = ""
-        end
-        if haskey(sieData[key]["chtags"],"somat:physical_range_min") && haskey(sieData[key]["chtags"],"somat:physical_range_max")
-            sieData2[nkey]["range"] = (parse(Float64,sieData[key]["chtags"]["somat:physical_range_min"]),parse(Float64,sieData[key]["chtags"]["somat:physical_range_max"]))
-        else
-            sieData2[nkey]["range"] = (NaN,NaN)
-        end
-        if haskey(sieData[key]["chtags"],"somat:electrical_units")
-            sieData2[nkey]["eunits"] = (sieData[key]["chtags"]["somat:electrical_units"])
-        else
-            sieData2[nkey]["eunits"] = ""
-        end
-        if haskey(sieData[key]["chtags"],"somat:electrical_range_min") && haskey(sieData[key]["chtags"],"somat:electrical_range_max")
-            sieData2[nkey]["erange"] = (parse(Float64, sieData[key]["chtags"]["somat:electrical_range_min"]),parse(Float64, sieData[key]["chtags"]["somat:electrical_range_max"]))
-        else
-            sieData2[nkey]["erange"] = (NaN,NaN)
-        end
-        if haskey(sieData[key]["chtags"],"somat:digital_filter_attenuation_frequency")
-            sieData2[nkey]["filtfreq"] = parse(Float64, sieData[key]["chtags"]["somat:digital_filter_attenuation_frequency"])
-        else
-            sieData2[nkey]["filtfreq"] = NaN
-        end
-        if haskey(sieData[key]["chtags"],"somat:digital_filter_type")
-            sieData2[nkey]["filttype"] = sieData[key]["chtags"]["somat:digital_filter_type"]
-        else
-            sieData2[nkey]["filttype"] = ""
-        end
+        sieData2[nkey]["v0"] = sieData[key]["data"][1]
+        sieData2[nkey]["v1"] = sieData[key]["data"][2]
+        sieData2[nkey]["tags"] = sieData[key]["chtags"]
+  
     end
     return sieData2
 end
 
-function parseSIEfull(siepath::String)
+function oldparseSIEfull(siepath::String)
     open(siepath,"r") do io 
             offset::Vector{UInt32} = [];
             group::Vector{UInt32} = [];
@@ -233,7 +169,7 @@ function parseSIEfull(siepath::String)
                             end
 
                             checksum::UInt32 = ntoh(read(io,UInt32))
-                            calc = crc32(bitVec)
+                            calc = oldcrc32(bitVec)
                             if (checksum != calc) && (checksum != 0)
                                 @warn "Checksum doesnt match"
                             end
@@ -258,7 +194,7 @@ function parseSIEfull(siepath::String)
 end
 
 
-function crc32(data::Vector{UInt8})
+function oldcrc32(data::Vector{UInt8})
     crc = 0xffffffff
     table = zeros(UInt32, 256)
     for i in 0:255
