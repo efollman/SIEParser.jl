@@ -2,9 +2,10 @@ module SIEParser
 
 using EzXML
 
-include("parseSIEKerchoo.jl")
+include("parseSIEkachow.jl")
+include("OLDparseSIEKerchoo.jl")
 
-export parseSIE 
-export parseSIEfull
+export parseSIE
+export oldparseSIE
 
 end
