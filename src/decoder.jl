@@ -83,8 +83,8 @@ function parseDecoderAsExpr(node::EzXML.Node)
             $endq
             $typeq
             pointer += $byteL
-            vars[$(n["var"])] = readBuff
-            isUpdated[$(n["var"])] = true
+            $(Symbol("decVar"*n["var"])) = readBuff
+            #isUpdated[$(n["var"])] = true
         end
 
         return qb
@@ -93,17 +93,13 @@ function parseDecoderAsExpr(node::EzXML.Node)
         @error "If operator in decoder is not implemented"
     end
     function sieSample(n)
-        q = quote 
-            for str in $vStrVec
-                if isUpdated[str]
-                    dimD[str][samplei] = vars[str]
+        q = quote end
+            for str in vStrVec
+                q = quote
+                    $q
+                    push!(dimD[$(QuoteNode(Symbol(str)))], $(Symbol("decVar"*str)))
                 end
-                isUpdated[str] = false
-                
-                
             end
-            samplei += 1
-        end
         return q
     end
     function sieSeek(n)
@@ -165,7 +161,7 @@ function parseDecoderAsExpr(node::EzXML.Node)
                             string = string * "\"]"
                             break
                         elseif !isletter(string[i])
-                            string = string[1:i-1] * "\"]" * string[i:end]
+                            string = string[1:i-1] * "" * string[i:end]
                             break
                         end
 
@@ -174,7 +170,7 @@ function parseDecoderAsExpr(node::EzXML.Node)
                 i += 1
             end
 
-            string = replace(string, "\$" => "vars[\"")
+            string = replace(string, "\$" => "decVar")
 
             #string = "function decFunc$(hash(string))(vars) $string end"
 
@@ -221,16 +217,16 @@ function parseDecoderAsExpr(node::EzXML.Node)
     funcName = Symbol("decoder$decoderHash")
 
     decoderq = quote
-        function $funcName(bin,dimD,samplei)
+        function $funcName(bin,dimD)
             pointer = 1
 
-            vars::Dict{String,Any} = Dict()
-            isUpdated::Dict{String,Bool} = Dict()
+            #vars::Dict{String,Any} = Dict()
+            #isUpdated::Dict{String,Bool} = Dict()
             breakall = false
 
             $decoderq
 
-            return dimD, samplei
+            return dimD
         end
     end
     

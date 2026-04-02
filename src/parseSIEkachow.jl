@@ -9,7 +9,7 @@ function parseSIE(siepath::String)
 
     sieD = decodeRaw(xmlDoc,binD)
 
-    #sieD = combineRawAndClean(sieD,rawVoD) #Not completely finished
+    sieD = cleanSIE(sieD)
 
     return sieD
     
@@ -74,6 +74,7 @@ function decodeRaw(doc,binD)
     sieDN::Dict = Dict()
     sieD::Dict = Dict()
     decoderD::Dict = Dict()
+    dimD::Dict{Symbol,Vector} = Dict()
 
     recurTags!(sieDN,decoderD,doc.root)
 
@@ -123,22 +124,33 @@ function decodeRaw(doc,binD)
 
         dimD = Dict()
         for var in keys(typeD[decID])
+
+            nVar = tryparse(UInt,var[2:end])
+            if isnothing(nVar)
+                continue
+            end
+
+            symVar = Symbol(var)
             if typeD[decID][var] == Vector{UInt8}
-                dimD[var] = fill(Vector{UInt8}([]),sieD[chName]["tags"]["SampleCount"])
+                dimD[symVar] = Vector{Vector{UInt8}}([])
             else
-                dimD[var] = zeros(typeD[decID][var],sieD[chName]["tags"]["SampleCount"])
+                dimD[symVar] = Vector{typeD[decID][var]}([])
+            end
+
+            if haskey(sieD[chName]["tags"],"SampleCount")
+                sizehint!(dimD[symVar],(sieD[chName]["tags"]["SampleCount"]))
             end
 
         end
 
-        samplei = 1
-
         for bin in binD[key]
-            (dimD, samplei) = invokelatest(evalD[decID],bin,dimD,samplei)
+            dimD = invokelatest(evalD[decID],bin,dimD)
         end
 
         for key in keys(dimD)
-            sieD[chName][key] = dimD[key]
+            sieD[chName][String(key)] = dimD[key] #copy and keeping dimD allocated seems to be worse first run ~10-20%
+            #sieD[chName][key] = copy(dimD[key])
+            #empty!(dimD[key])
         end
 
     end
@@ -146,44 +158,45 @@ function decodeRaw(doc,binD)
 end
 
 function cleanSIE(sieD) #need to update with new changes
-    for key in keys(parsedRaw)
-        
+    dims::Vector{String} = []
+    for key in keys(sieD)
+        empty!(dims)
+        for subkey in keys(sieD[key])
+            if subkey[1] != 'v'
+                continue
+            end
+            push!(dims,subkey)
+        end
 
-        for dim in dims
-            
+
+
+        for dim in dims   
             if haskey(sieD[key]["tags"]["dim$(dim[2:end])"],"xform")
                 if haskey(sieD[key]["tags"]["dim$(dim[2:end])"]["xform"],"scale")
-                    sieD[key][dim] = Vector{Float64}(sieD[key][dim]) # bodge
+                    sieD[key][dim] = Vector{Float64}(sieD[key][dim]) # bodge, could maybe be a bit more type efficient, should probably pipe ultimate type into decoder somehow so we dont allocate a whole new vector
                     sieD[key][dim] .*= sieD[key]["tags"]["dim$(dim[2:end])"]["xform"]["scale"]
                 end
                 if haskey(sieD[key]["tags"]["dim$(dim[2:end])"]["xform"],"offset")
+                    sieD[key][dim] = Vector{Float64}(sieD[key][dim])
                     sieD[key][dim] .+= sieD[key]["tags"]["dim$(dim[2:end])"]["xform"]["offset"]
                 end
             end
-        end
 
-        #hardcoded Fix could be better (could sample vectors with step?, check if vector is Unit stepable at end, would be inneficient but covers more edge cases)
-        #confirmed doesnt handle event slices in sequential, uses tags do define mx + b transform. they just decided it should be implied in TS ¯\_(ツ)_/¯
+            #hardcoded Fix could be better (could sample vectors with step?, check if vector is Unit stepable at end, would be inneficient but covers more edge cases)
+            #confirmed doesnt handle event slices in sequential, uses tags do define mx + b transform. they just decided it should be implied in TS ¯\_(ツ)_/¯
 
-        if haskey(sieD[key]["tags"],"somat:datamode_type") && haskey(sieD[key]["tags"],"core:sample_rate")
-            if sieD[key]["tags"]["somat:datamode_type"] == "time_history" && sieD[key]["tags"]["dim0"]["core:units"] == "Seconds"
-                start = sieD[key]["v0"][1]
-                sr = sieD[key]["tags"]["core:sample_rate"]
-                len = length(sieD[key]["v1"])
-                sieD[key]["v0"] = collect(start:(1/sr):(len-1+start)*(1/sr))
-            end
-        end
-
-        if haskey(sieD[key]["tags"],"somat:datamode_type")
-            if sieD[key]["tags"]["somat:datamode_type"] == "time_history"
-                for dim in dims
-                    if length(sieD[key]["v0"]) != length(sieD[key][dim])
-                        @warn "Vector length mismatch in sequential data, check assumptions made in TS decoder fix"
-                        println(key)
-                    end
+            if haskey(sieD[key]["tags"],"somat:datamode_type") && haskey(sieD[key]["tags"],"core:sample_rate")
+                if sieD[key]["tags"]["somat:datamode_type"] == "time_history" && sieD[key]["tags"]["dim0"]["core:units"] == "Seconds"
+                    start = sieD[key]["v0"][1]
+                    sr = sieD[key]["tags"]["core:sample_rate"]
+                    len = length(sieD[key]["v0"])
+                    sieD[key]["v0"] = LinRange(start,(len-1+start)*(1/sr),len)
                 end
             end
         end
+
+        
+
     end
     return sieD
 end
