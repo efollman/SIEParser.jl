@@ -1,6 +1,6 @@
-using SIEParser
+using SomatSIE
 using Test
 
-@testset "SIEParser.jl" begin
+@testset "SomatSIE.jl" begin
     # Write your tests here.
 end

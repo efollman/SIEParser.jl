@@ -1,4 +1,4 @@
-name = "SIEParser"
+name = "SomatSIE"
 uuid = "42c9172c-a860-479f-a7e6-dd0e15e4e07f"
 version = "0.2.0"
 authors = ["Evan Follman"]

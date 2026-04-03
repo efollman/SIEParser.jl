@@ -1,6 +1,6 @@
-# SIEParser
+# SomatSIE
 
-[![Build Status](https://github.com/efollman/SIEParser.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/efollman/SIEParser.jl/actions/workflows/CI.yml?query=branch%3Amaster)
+[![Build Status](https://github.com/efollman/SIEParser.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/efollman/SomatSIE.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 
 This is a WIP parser for Somat SIE files produced by their edaq equipment.
 
