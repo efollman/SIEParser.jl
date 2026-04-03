@@ -9,7 +9,7 @@ usage:
 parseSIE("path/to/file.sie")
 ```
 
-The output of this function is a Nested dictionary. The keys being "tags" and "v0","v1",...,"vn" depending on the number of vectors defined in the file. "tags" contains all of the xml tags for that channel found in the file.
+The output of this function is a Nested dictionary. The base keys being the channel names found in the file, and subkeys being "tags" and "v0","v1",...,"vn" depending on the number of vectors defined in the file. "tags" contains all of the xml tags for that channel found in the file.
 
 Most likely you will be working with basic time series data channes, in this case "v0" is always time and "v1" is data (This is pulled from convention found in the file) this may also be changed to better lables in the future.
 
@@ -29,4 +29,3 @@ known problems:
 - commonly needed tags should be exposed as base level tags such as :sr for sample rate. Should be careful with this as removing them would be breaking after they are added
 - not sure that a nested dictionary is the right approach. a struct would be nicer but i had problems with memory efficency due to the nature of the information.
 - tests need to be improved with a larger variety of files, as well as proper verification they are parsed correctly. Somat offers an edaq emulator which may allow me to generate a variety of files without exposing sensitive information.
-- code is pretty messy and unorganized at the moment ¯\\_(ツ)_/¯
