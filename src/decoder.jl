@@ -3,18 +3,20 @@ function parseDecoderAsExpr(node::EzXML.Node)
     vType::Dict{String,DataType} = Dict()
     vStrVec::Vector{String} = []
 
-    function sieRead(n,inloop::Bool)
-        if haskey(n,"bits")
-            byteL = parseExpr(UInt,n["bits"]) ÷ 8
+    function sieRead(n, inloop::Bool)
+        if haskey(n, "bits")
+            byteL = parseExpr(UInt, n["bits"]) ÷ 8
         elseif haskey(n, "octets")
-            byteL = parseExpr(UInt,n["octets"])
+            byteL = parseExpr(UInt, n["octets"])
         else
             @error "decoder error read has no bits/octets field"
         end
 
-        if haskey(n,"endian")
+        if haskey(n, "endian")
             if n["endian"] == "big"
-            endq = quote reverse!(readBuff) end
+                endq = quote
+                    reverse!(readBuff)
+                end
             else
                 endq = quote end
             end
@@ -22,8 +24,8 @@ function parseDecoderAsExpr(node::EzXML.Node)
             endq = quote end
         end
 
-        
-        if haskey(n,"value")
+
+        if haskey(n, "value")
             #assertValue = parseExpr()
         end
 
@@ -36,31 +38,31 @@ function parseDecoderAsExpr(node::EzXML.Node)
                 readTypeS = "UInt"
             end
             readTypeS = uppercasefirst(readTypeS)*string(byteL*8)
-            readType = getfield(Base,Symbol(readTypeS))
+            readType = getfield(Base, Symbol(readTypeS))
 
         end
 
-        
-
-        if haskey(n,"var")
+        if haskey(n, "var")
             var = n["var"]
             if var[1] == 'v' && !(var in vStrVec) #lazy check (check if after v numeric as well?)
-                push!(vStrVec,var)
+                push!(vStrVec, var)
             end
         else
             @error "No var keyword in read op in decoder"
         end
 
-        if !haskey(vType,var)
+        if !haskey(vType, var)
             vType[var] = readType
         end
 
         if readType == Vector{UInt8}
             typeq = quote end
         else
-            typeq = quote readBuff = reinterpret($readType,readBuff)[] end
+            typeq = quote
+                readBuff = reinterpret($readType, readBuff)[]
+            end
         end
-        
+
         if inloop
             bq = quote
                 if pointer + $byteL - 1 > length(bin) || pointer < 1
@@ -75,11 +77,10 @@ function parseDecoderAsExpr(node::EzXML.Node)
                 end
             end
         end
-        
 
         qb = quote
             $bq
-            readBuff = bin[pointer:pointer+$byteL-1]
+            readBuff = bin[pointer:(pointer+$byteL-1)]
             $endq
             $typeq
             pointer += $byteL
@@ -94,24 +95,26 @@ function parseDecoderAsExpr(node::EzXML.Node)
     end
     function sieSample(n)
         q = quote end
-            for str in vStrVec
-                q = quote
-                    $q
-                    push!(dimD[$(QuoteNode(Symbol(str)))], $(Symbol("decVar"*str)))
-                end
+        for str in vStrVec
+            q = quote
+                $q
+                push!(dimD[$(QuoteNode(Symbol(str)))], $(Symbol("decVar"*str)))
             end
+        end
         return q
     end
     function sieSeek(n)
-        if haskey(n,"from")
+        if haskey(n, "from")
             if n["from"] == "current"
             else
                 @error "Decoder error seek from anything other than current is not implemented"
             end
         end
 
-        if haskey(n,"offset")
-            q = quote pointer += $(parseExpr(Int,n["offset"])) end
+        if haskey(n, "offset")
+            q = quote
+                pointer += $(parseExpr(Int, n["offset"]))
+            end
         else
             @error "Seek in decoder does not have offset tag"
         end
@@ -125,9 +128,9 @@ function parseDecoderAsExpr(node::EzXML.Node)
     function sieLoop(n)
         q = quote end
         for nodeL in elements(n)
-            q = quote 
-                $q 
-                $(doNode(nodeL,true))
+            q = quote
+                $q
+                $(doNode(nodeL, true))
             end
         end
 
@@ -141,14 +144,14 @@ function parseDecoderAsExpr(node::EzXML.Node)
         end
 
         return q
-          
-        
+
+
     end
 
     function parseExpr(Type, string)
         if string[1] == '{' #lazy check
 
-            string = string[2:end-1]
+            string = string[2:(end-1)]
 
 
             dollarLoc = 0
@@ -161,7 +164,7 @@ function parseDecoderAsExpr(node::EzXML.Node)
                             string = string * "\"]"
                             break
                         elseif !isletter(string[i])
-                            string = string[1:i-1] * "" * string[i:end]
+                            string = string[1:(i-1)] * "" * string[i:end]
                             break
                         end
 
@@ -175,21 +178,19 @@ function parseDecoderAsExpr(node::EzXML.Node)
             #string = "function decFunc$(hash(string))(vars) $string end"
 
             exprF = Meta.parse(string) #still slightly stinky but better
-            
-            return quote $exprF end
 
-
-
+            return quote
+                $exprF
+            end
 
         else
             return parse(Type, string)
         end
     end
-    
 
-    function doNode(nodeD,isloop::Bool)
+    function doNode(nodeD, isloop::Bool)
         if nodeD.name == "read"
-            return sieRead(nodeD,isloop)
+            return sieRead(nodeD, isloop)
         elseif nodeD.name == "if"
             return sieIf(nodeD)
         elseif nodeD.name == "sample"
@@ -208,7 +209,7 @@ function parseDecoderAsExpr(node::EzXML.Node)
     for nodeFor in elements(node)
         decoderq = quote
             $decoderq
-            $(doNode(nodeFor,false))
+            $(doNode(nodeFor, false))
         end
     end
 
@@ -217,7 +218,7 @@ function parseDecoderAsExpr(node::EzXML.Node)
     funcName = Symbol("decoder$decoderHash")
 
     decoderq = quote
-        function $funcName(bin,dimD)
+        function $funcName(bin, dimD)
             pointer = 1
 
             #vars::Dict{String,Any} = Dict()
@@ -229,6 +230,6 @@ function parseDecoderAsExpr(node::EzXML.Node)
             return dimD
         end
     end
-    
+
     return decoderq, vType
 end
