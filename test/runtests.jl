@@ -1,6 +1,6 @@
 using SomatSIE
 using Test
 
-@testset "SomatSIEs.jl" begin
+@testset "SomatSIE.jl" begin
     # Write your tests here.
 end
