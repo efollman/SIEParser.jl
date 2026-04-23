@@ -464,15 +464,13 @@ function Base.Matrix(o::Output)
                 "Output to Matrix{Float64} — read per-dimension instead"))
     end
     M = Matrix{Float64}(undef, nr, nd)
-    r = Ref{Cdouble}(0.0)
-    GC.@preserve r begin
-        rp = Base.unsafe_convert(Ptr{Cdouble}, r)
+    nr == 0 && return M
+    written = Ref{Csize_t}(0)
+    GC.@preserve M begin
         for d in 1:nd
-            d0 = Csize_t(d - 1)
-            @inbounds for row in 1:nr
-                L.sie_output_get_float64(o.handle, d0, Csize_t(row - 1), rp)
-                M[row, d] = r[]
-            end
+            base = pointer(M, (d - 1) * nr + 1)
+            _check(L.sie_output_get_float64_range(
+                o.handle, Csize_t(d - 1), Csize_t(0), Csize_t(nr), base, written))
         end
     end
     return M
@@ -610,30 +608,40 @@ function Base.read(file::SieFile, dim::Dimension)
         out === nothing && return Float64[]   # empty channel — default to float
         ct = coltype(out, d)
         if ct === :float64
-            buf = Float64[]
-            d0  = Csize_t(d - 1)
-            r   = Ref{Cdouble}(0.0)
-            GC.@preserve r begin
-                rp = Base.unsafe_convert(Ptr{Cdouble}, r)
-                while out !== nothing
-                    nr   = numrows(out)
+            buf     = Float64[]
+            d0      = Csize_t(d - 1)
+            written = Ref{Csize_t}(0)
+            while out !== nothing
+                nr   = numrows(out)
+                if nr > 0
                     base = length(buf)
                     resize!(buf, base + nr)
-                    h    = out.handle
-                    @inbounds for row in 1:nr
-                        L.sie_output_get_float64(h, d0, Csize_t(row - 1), rp)
-                        buf[base + row] = r[]
-                    end
-                    out = next!(s)
+                    GC.@preserve buf _check(L.sie_output_get_float64_range(
+                        out.handle, d0, Csize_t(0), Csize_t(nr),
+                        pointer(buf, base + 1), written))
                 end
+                out = next!(s)
             end
             return buf
         elseif ct === :raw
-            buf = Vector{Vector{UInt8}}()
+            buf     = Vector{Vector{UInt8}}()
+            d0      = Csize_t(d - 1)
+            written = Ref{Csize_t}(0)
+            ptrs    = Vector{Ptr{UInt8}}()
+            sizes   = Vector{UInt32}()
             while out !== nothing
                 nr = numrows(out)
-                @inbounds for r in 1:nr
-                    push!(buf, getraw(out, d, r))
+                if nr > 0
+                    resize!(ptrs,  nr)
+                    resize!(sizes, nr)
+                    GC.@preserve ptrs sizes _check(L.sie_output_get_raw_range(
+                        out.handle, d0, Csize_t(0), Csize_t(nr),
+                        pointer(ptrs), pointer(sizes), written))
+                    @inbounds for i in 1:nr
+                        p, n = ptrs[i], Int(sizes[i])
+                        push!(buf, (p == C_NULL || n == 0) ? UInt8[] :
+                            copy(unsafe_wrap(Array, p, n; own = false)))
+                    end
                 end
                 out = next!(s)
             end
@@ -650,8 +658,8 @@ end
 
 In-place variant of [`read`](@ref) for `:float64` dimensions. `dest` is
 resized to fit the channel and filled with engineering-scaled samples.
-Reuses a single `Ref{Cdouble}` and skips the per-sample status check on the
-hot path (the C ABI guarantees `SIE_OK` for in-bounds reads).
+Uses the libsie `sie_output_get_float64_range` bulk getter so each block
+costs a single `ccall` instead of one per sample.
 
 Throws on `:raw`/`:none` columns; for those use [`read`](@ref).
 """
@@ -667,22 +675,19 @@ function Base.read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64}
         ct = coltype(out, d)
         ct === :float64 || error(
             "read! requires a :float64 dimension; dim $(index(dim)) is :$ct")
-        d0   = Csize_t(d - 1)
-        r    = Ref{Cdouble}(0.0)
+        d0      = Csize_t(d - 1)
+        written = Ref{Csize_t}(0)
         resize!(dest, 0)
-        GC.@preserve r begin
-            rp = Base.unsafe_convert(Ptr{Cdouble}, r)
-            while out !== nothing
-                nr   = numrows(out)
+        while out !== nothing
+            nr = numrows(out)
+            if nr > 0
                 base = length(dest)
                 resize!(dest, base + nr)
-                h    = out.handle
-                @inbounds for row in 1:nr
-                    L.sie_output_get_float64(h, d0, Csize_t(row - 1), rp)
-                    dest[base + row] = r[]
-                end
-                out = next!(s)
+                GC.@preserve dest _check(L.sie_output_get_float64_range(
+                    out.handle, d0, Csize_t(0), Csize_t(nr),
+                    pointer(dest, base + 1), written))
             end
+            out = next!(s)
         end
         return dest
     end

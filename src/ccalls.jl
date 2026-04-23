@@ -159,6 +159,20 @@ sie_output_get_raw(h, dim, row, ptr, size) =
           (Ptr{Cvoid}, Csize_t, Csize_t, Ptr{Ptr{UInt8}}, Ptr{UInt32}),
           h, Csize_t(dim), Csize_t(row), ptr, size)
 
+# Bulk range getters (libsie-z >= 0.3.2). These collapse the per-sample
+# Julia↔C crossing into one call per block. See libsie-z-optimization-notes.md
+# item (1) for design notes.
+sie_output_get_float64_range(h, dim, start_row, count, out_buf, out_written) =
+    ccall((:sie_output_get_float64_range, libsie), Cint,
+          (Ptr{Cvoid}, Csize_t, Csize_t, Csize_t, Ptr{Cdouble}, Ptr{Csize_t}),
+          h, Csize_t(dim), Csize_t(start_row), Csize_t(count), out_buf, out_written)
+sie_output_get_raw_range(h, dim, start_row, count, out_ptrs, out_sizes, out_written) =
+    ccall((:sie_output_get_raw_range, libsie), Cint,
+          (Ptr{Cvoid}, Csize_t, Csize_t, Csize_t,
+           Ptr{Ptr{UInt8}}, Ptr{UInt32}, Ptr{Csize_t}),
+          h, Csize_t(dim), Csize_t(start_row), Csize_t(count),
+          out_ptrs, out_sizes, out_written)
+
 # ── Stream ──────────────────────────────────────────────────────────────────
 sie_stream_new(out) =
     ccall((:sie_stream_new, libsie), Cint, (Ptr{Ptr{Cvoid}},), out)
