@@ -1,31 +1,112 @@
-# SomatSIE
+# SomatSIE.jl
 
-[![Build Status](https://github.com/efollman/SIEParser.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/efollman/SomatSIE.jl/actions/workflows/CI.yml?query=branch%3Amaster)
+[![Build Status](https://github.com/efollman/SomatSIE.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/efollman/SomatSIE.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 
-This is a WIP parser for Somat SIE files produced by their edaq equipment.
+`SomatSIE.jl` is a Julia wrapper around [libsie-z](https://github.com/efollman/libsie-z) — a Zig port of HBM/Somat's `libsie` library for reading SIE files produced by eDAQ acquisition equipment. The shared library binaries are supplied by [`libsie_jll`](https://github.com/efollman/libsie_jll.jl); this package provides idiomatic Julia types, iteration, and `read`/`open`/`close` semantics on top of the C ABI.
 
-usage:
+## Installation
+
 ```julia
-parseSIE("path/to/file.sie")
+] add SomatSIE
 ```
 
-The output of this function is a Nested dictionary. The base keys being the channel names found in the file, and subkeys being "tags" and "v0","v1",...,"vn" depending on the number of vectors defined in the file. "tags" contains all of the xml tags for that channel found in the file.
+## Quick start
 
-Most likely you will be working with basic time series data channes, in this case "v0" is always time and "v1" is data (This is pulled from convention found in the file) this may also be changed to better lables in the future.
+```julia
+using SomatSIE
 
+open(SomatSIE.SieFile, "myfile.sie") do f
+    @show libsie_version()
+    println("file: ", nchannels(f), " channels in ", ntests(f), " tests")
 
-known problems:
-- I havent seen every type of channel possible so things could break unexpectedly. As far as i know you should always get the raw data vectors read from the file though for the most part.
-- currently the entire file is loaded into a dictionary in memory. This may not be ideal for large files or if only some channels or a portion of a channel are desired.
-- the part that parses the decoder found in the file heavily uses julia metaprogramming features which I am new too. for the most part it is well defined with quote blocks; however, parsing expressions found in the decoder directly uses meta.parse which could technically allow code injection with untrusted files or something.
-- in the decoder parser described above, some of the opperators such as IF and SET are not implemented yet as I havent seen them in a file to be able to test them properly. similarly some options such as seek from start or from end are not implemented. should hopefully throw warning/error messages if these come up.
-- Currently the solution for ensuring the time vector steps properly is a bodge, and may not always function properly. (this is due to only one sample for time in every 1000+ sample block in file, i havent found a reliable way to make sure this implies the time vector should be stepped.)
-- related to above, m=# b=# linear transforms are sometimes found in other channels (seem to just be implied in basic time series channels), this is also not implemented yet.
-- raw type is currently represented as a vector of vectors of UInt8, this might not be the most efficient.
-- types defined in the channels are not currently used. types are kept as they are read from the decoder and converted to Float64 if an xform tag is defined.
-- the nested Dictionaries in the output are {Any,Any} when it could be simplified to something like {String,Union{<:Real,Vector{UInt8},Itself}} though i havent figured out recursive type definition yet. it is unclear how much benifit this would have
-- as the modes are pretty well defined, the "v0" style tags could be auto renamed to "time" "data" ect though this would be a breaking change.
-- the base tags could also be represented by symbols such as :time :data  :tags for easier typing. (could maybe pull this from tags, unsure if they are reliably there and consistent)
-- commonly needed tags should be exposed as base level tags such as :sr for sample rate. Should be careful with this as removing them would be breaking after they are added
-- not sure that a nested dictionary is the right approach. a struct would be nicer but i had problems with memory efficency due to the nature of the information.
-- tests need to be improved with a larger variety of files, as well as proper verification they are parsed correctly. Somat offers an edaq emulator which may allow me to generate a variety of files without exposing sensitive information.
+    for ch in channels(f)
+        for dim in dimensions(ch)
+            # Per-dimension read returns a typed Julia vector:
+            #   * `:float64` columns -> Vector{Float64} of engineering values
+            #   * `:raw`     columns -> Vector{Vector{UInt8}} (e.g. CAN frames)
+            data  = read(f, dim)
+            units = get(tags(dim), "core:units", nothing)
+            println("  ", name(ch), " dim ", index(dim),
+                    "  ", typeof(data), " len=", length(data),
+                    units === nothing ? "" : "  units=" * value(units))
+        end
+    end
+end
+```
+
+For sequential time-series channels, dimension index 0 is typically time and
+dimension index 1 is the engineering value — read each separately and pair
+them in your own code.
+
+For large files where you do not want to materialize everything at once, iterate the spigot directly to get one block at a time:
+
+```julia
+spigot(file, channel) do s
+    for out in s             # `out` is a `SomatSIE.Output`, valid until the next iteration
+        nr = numrows(out)
+        for r in 1:nr
+            t = getfloat64(out, 1, r)   # dimension 1 = time
+            v = getfloat64(out, 2, r)   # dimension 2 = data
+            # ...
+        end
+    end
+end
+```
+
+## Concepts
+
+| Type | Purpose |
+|------|---------|
+| `SieFile` | An opened SIE file. Owns the underlying handle; `close` it (or use `open(SieFile, path) do f ... end`). |
+| `SomatSIE.Test` | A test (acquisition session) within a file. Borrowed. |
+| `SomatSIE.Channel` | A data series. Borrowed. |
+| `SomatSIE.Dimension` | A single column/axis of a channel. Borrowed. |
+| `SomatSIE.Tag` | A key/value metadata entry. Value may be `String` or `Vector{UInt8}`. Borrowed. |
+| `Spigot` | A per-channel data pipeline. Iterate to get `Output` blocks, or `read` it for a `Matrix{Float64}`. |
+| `Output` | A decoded data block. **Invalidated by the next `next!` / iteration on the spigot.** |
+| `Stream` | Incremental SIE block parser for streaming/network ingest. |
+| `Histogram` | Materialized histogram-channel data. |
+
+Tags behave like a hybrid array/dict:
+
+```julia
+ts = tags(channel)            # SomatSIE.Tags collection
+length(ts)                    # number of tags
+for t in ts; @show key(t), value(t); end
+ts[1]                         # by 1-based index -> Tag
+ts["core:sample_rate"]        # by key -> Tag (throws KeyError if missing)
+get(ts, "core:units", nothing)
+haskey(ts, "core:schema")
+```
+
+## API surface
+
+Core types: `SieFile`, `Spigot`, `Stream`, `Histogram`, `Output`, `Tag`, `Tags`, `SieError`, plus the unexported `SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`.
+
+Reading & navigation: `channels`, `tests`, `tags`, `dimensions`, `dimension`, `channel`, `test`, `findchannel`, `findtest`, `containingtest`, `nchannels`, `ntests`.
+
+Spigot: `spigot`, `next!`, `numblocks`, `reset!`, `disable_transforms!`, `set_scan_limit!`, plus extensions of `Base.position`, `Base.seek`, `Base.close`, `Base.iterate`.
+
+Reading data: `read(file, dim)` — returns `Vector{Float64}` for float columns or `Vector{Vector{UInt8}}` for raw columns. Iterate the spigot directly for streaming/per-block access.
+
+Output access: `numrows`, `numdims`, `block`, `coltype`, `getfloat64`, `getraw`, plus `Base.Matrix(out)` for an all-float64-columns copy (throws on raw columns).
+
+Tags: `key`, `value`, `valuesize`, `isstring`, `isbinary`, `group`, `isfromgroup`.
+
+Stream: `add!`, `numgroups`, `group_numblocks`, `group_numbytes`, `group_isclosed`.
+
+Histogram: `numdims`, `numbins`, `totalsize`, `getbin`, `bounds`.
+
+Library info: `libsie_version`.
+
+## Limitations
+
+The C ABI exposed by `libsie_jll` (v0.3) is **read-only** — no SIE-file writer is available yet. When `libsie-z` adds a writer to its C ABI, this package will grow corresponding write support.
+
+## Versioning
+
+This is a major rewrite (v0.3). Earlier `0.x` versions of `SomatSIE.jl` parsed SIE files in pure Julia and returned a nested `Dict` from `parseSIE(path)`. That API is gone — use `read(open(SieFile, path) do f ... end, dim)` (or the explicit form) and walk the `file → channel → dimension` tree.
+
+## License
+
+MIT, matching the original project. The underlying `libsie-z` library is LGPL 2.1.
