@@ -464,8 +464,16 @@ function Base.Matrix(o::Output)
                 "Output to Matrix{Float64} — read per-dimension instead"))
     end
     M = Matrix{Float64}(undef, nr, nd)
-    for d in 1:nd, r in 1:nr
-        @inbounds M[r, d] = getfloat64(o, d, r)
+    r = Ref{Cdouble}(0.0)
+    GC.@preserve r begin
+        rp = Base.unsafe_convert(Ptr{Cdouble}, r)
+        for d in 1:nd
+            d0 = Csize_t(d - 1)
+            @inbounds for row in 1:nr
+                L.sie_output_get_float64(o.handle, d0, Csize_t(row - 1), rp)
+                M[row, d] = r[]
+            end
+        end
     end
     return M
 end
@@ -603,14 +611,21 @@ function Base.read(file::SieFile, dim::Dimension)
         ct = coltype(out, d)
         if ct === :float64
             buf = Float64[]
-            while out !== nothing
-                nr = numrows(out)
-                resize!(buf, length(buf) + nr)
-                base = length(buf) - nr
-                @inbounds for r in 1:nr
-                    buf[base + r] = getfloat64(out, d, r)
+            d0  = Csize_t(d - 1)
+            r   = Ref{Cdouble}(0.0)
+            GC.@preserve r begin
+                rp = Base.unsafe_convert(Ptr{Cdouble}, r)
+                while out !== nothing
+                    nr   = numrows(out)
+                    base = length(buf)
+                    resize!(buf, base + nr)
+                    h    = out.handle
+                    @inbounds for row in 1:nr
+                        L.sie_output_get_float64(h, d0, Csize_t(row - 1), rp)
+                        buf[base + row] = r[]
+                    end
+                    out = next!(s)
                 end
-                out = next!(s)
             end
             return buf
         elseif ct === :raw
@@ -628,6 +643,71 @@ function Base.read(file::SieFile, dim::Dimension)
                   "' has no data type (:none)")
         end
     end
+end
+
+"""
+    read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64}) -> dest
+
+In-place variant of [`read`](@ref) for `:float64` dimensions. `dest` is
+resized to fit the channel and filled with engineering-scaled samples.
+Reuses a single `Ref{Cdouble}` and skips the per-sample status check on the
+hot path (the C ABI guarantees `SIE_OK` for in-bounds reads).
+
+Throws on `:raw`/`:none` columns; for those use [`read`](@ref).
+"""
+function Base.read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64})
+    ch = dim.parent::Channel
+    d  = index(dim) + 1
+    spigot(file, ch) do s
+        out = next!(s)
+        if out === nothing
+            resize!(dest, 0)
+            return dest
+        end
+        ct = coltype(out, d)
+        ct === :float64 || error(
+            "read! requires a :float64 dimension; dim $(index(dim)) is :$ct")
+        d0   = Csize_t(d - 1)
+        r    = Ref{Cdouble}(0.0)
+        resize!(dest, 0)
+        GC.@preserve r begin
+            rp = Base.unsafe_convert(Ptr{Cdouble}, r)
+            while out !== nothing
+                nr   = numrows(out)
+                base = length(dest)
+                resize!(dest, base + nr)
+                h    = out.handle
+                @inbounds for row in 1:nr
+                    L.sie_output_get_float64(h, d0, Csize_t(row - 1), rp)
+                    dest[base + row] = r[]
+                end
+                out = next!(s)
+            end
+        end
+        return dest
+    end
+end
+
+"""
+    numrows(file::SieFile, ch::Channel) -> Int
+
+Total number of samples in `ch` without materializing the data. Walks the
+channel's spigot once, summing `numrows(out)` per block — one ccall per
+block rather than per sample, so cheap even for multi-million-row channels.
+
+Useful when constructing a time axis for a sequential time-history channel
+directly from `core:sample_rate` instead of reading dim-0.
+"""
+function numrows(file::SieFile, ch::Channel)
+    n = 0
+    spigot(file, ch) do s
+        out = next!(s)
+        while out !== nothing
+            n += numrows(out)
+            out = next!(s)
+        end
+    end
+    return n
 end
 
 Base.show(io::IO, s::Spigot) = print(io,
