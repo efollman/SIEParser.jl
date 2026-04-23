@@ -7,7 +7,7 @@ authors = ["Evan Follman"]
 libsie_jll = "9a7a2636-0e74-5969-9599-5bb538224742"
 
 [compat]
-libsie_jll = "0.3"
+libsie_jll = "0.3.2"
 julia = "1.10"
 
 [extras]
