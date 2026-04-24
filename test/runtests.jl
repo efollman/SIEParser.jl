@@ -5,7 +5,7 @@ using SomatSIE: SieFile, Spigot, Stream, Tag, Tags, Output, libsie_version,
                 channel, test, findchannel, findtest, containingtest,
                 next!, numrows, numdims, numblocks, block, coltype,
                 getfloat64, isstring, isbinary, value, key, valuesize,
-                id, testid, name, index, nchannels, ntests, reset!,
+                id, testid, name, nchannels, ntests, reset!,
                 add!, numgroups
 
 # Helpers
@@ -64,7 +64,8 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                     @test testid(c) == id(t)
                     @test numdims(c) >= 1
                     for d in dimensions(c)
-                        @test index(d) isa Integer
+                        @test id(d) isa Integer
+                        @test id(d) >= 1
                     end
                     # round-trip lookup
                     @test findchannel(f, id(c)) !== nothing

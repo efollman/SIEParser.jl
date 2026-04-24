@@ -162,7 +162,7 @@ end
 
 A single axis ("column") of a [`Channel`](@ref). Borrowed from the channel.
 
-Use [`index`](@ref) and [`name`](@ref) for identity, [`tags`](@ref) for
+Use [`id`](@ref) and [`name`](@ref) for identity, [`tags`](@ref) for
 per-dimension metadata, and `read(file, dim)` to materialize the dimension's
 entire data series as a typed Julia vector — see
 [`read(::SieFile, ::Dimension)`](@ref).
@@ -175,19 +175,20 @@ end
 handle(d::Dimension) = d.handle
 
 """
-    index(dim::Dimension) -> Int
+    id(dim::Dimension) -> Int
 
-Zero-based dimension index (0 is typically time, 1 is value for sequential
-time-series channels).
+1-based dimension identifier (1 is typically time, 2 is value for sequential
+time-series channels). Note: this differs from the libsie/file 0-based
+convention — Julia code is uniformly 1-based.
 """
-index(d::Dimension) = Int(L.sie_dimension_index(d.handle))
+id(d::Dimension)    = Int(L.sie_dimension_index(d.handle)) + 1
 name(d::Dimension)  = _ptrlen_to_string(L.sie_dimension_name, d.handle)
 
 tags(d::Dimension) = Tags(d, Int(L.sie_dimension_num_tags(d.handle)),
     L.sie_dimension_tag, L.sie_dimension_find_tag)
 
 Base.show(io::IO, d::Dimension) =
-    print(io, "Dimension(", index(d), ", ", repr(name(d)), ")")
+    print(io, "Dimension(", id(d), ", ", repr(name(d)), ")")
 
 # ── Channel ─────────────────────────────────────────────────────────────────
 
@@ -602,7 +603,7 @@ end
 """
 function Base.read(file::SieFile, dim::Dimension)
     ch = dim.parent::Channel
-    d  = index(dim) + 1   # libsie dimension index is 0-based; convert to 1-based
+    d  = id(dim)   # 1-based
     return spigot(file, ch) do s
         out = next!(s)
         out === nothing && return Float64[]   # empty channel — default to float
@@ -647,7 +648,7 @@ function Base.read(file::SieFile, dim::Dimension)
             end
             return buf
         else
-            error("dimension $(index(dim)) of channel '", name(ch),
+            error("dimension $(id(dim)) of channel '", name(ch),
                   "' has no data type (:none)")
         end
     end
@@ -665,7 +666,7 @@ Throws on `:raw`/`:none` columns; for those use [`read`](@ref).
 """
 function Base.read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64})
     ch = dim.parent::Channel
-    d  = index(dim) + 1
+    d  = id(dim)
     spigot(file, ch) do s
         out = next!(s)
         if out === nothing
@@ -674,7 +675,7 @@ function Base.read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64}
         end
         ct = coltype(out, d)
         ct === :float64 || error(
-            "read! requires a :float64 dimension; dim $(index(dim)) is :$ct")
+            "read! requires a :float64 dimension; dim $(id(dim)) is :$ct")
         d0      = Csize_t(d - 1)
         written = Ref{Csize_t}(0)
         resize!(dest, 0)
