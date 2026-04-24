@@ -55,10 +55,12 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             @test !isempty(ts)
             for t in ts
                 @test t.id isa Integer
+                @test t.id >= 1
                 @test t.name isa AbstractString
                 for c in t.channels
                     @test c isa SomatSIE.Channel
                     @test c.id isa Integer
+                    @test c.id >= 1
                     @test length(c.dimensions) >= 1
                     for d in c.dimensions
                         @test d.id isa Integer

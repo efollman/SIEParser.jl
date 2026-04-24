@@ -119,7 +119,8 @@ do not use after the file is closed.
 
 ### `test.id -> Int`
 
-SIE-internal numeric test id.
+**1-based** test id. Note: this differs from the libsie/file 0-based
+convention — Julia code is uniformly 1-based.
 
 ### `test.name -> String`
 
@@ -147,7 +148,9 @@ A data series within a `SieFile`. Borrowed from the file.
 
 ### `ch.id -> Int`
 
-SIE-internal channel id.
+**1-based** channel id (unique within its `Test`). Note: this differs
+from the libsie/file 0-based convention — Julia code is uniformly
+1-based.
 
 ### `ch.name -> String`
 

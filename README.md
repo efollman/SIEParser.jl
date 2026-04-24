@@ -85,9 +85,10 @@ may collide between tests; iterate with
 `length(t.channels)`, etc. for counts; index the returned `Vector`
 directly for positional access.
 
-Identity: `x.id`, `x.name`. Note `dim.id` is **1-based** (1 is
-typically time, 2 is value) — unlike libsie's underlying 0-based
-convention.
+Identity: `x.id`, `x.name`. All `id` properties (`t.id`, `ch.id`,
+`dim.id`) are **1-based** — unlike libsie's underlying 0-based
+convention. For `dim.id`, 1 is typically time and 2 is value on
+sequential time-series channels.
 
 Library info: `libsie_version`.
 

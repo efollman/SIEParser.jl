@@ -148,7 +148,7 @@ struct Channel
     parent::Any   # keeps SieFile alive
 end
 
-_id(c::Channel)       = Int(L.sie_channel_id(c.handle))
+_id(c::Channel)       = Int(L.sie_channel_id(c.handle)) + 1
 _name(c::Channel)     = _ptrlen_to_string(L.sie_channel_name, c.handle)
 _numdims(c::Channel)  = Int(L.sie_channel_num_dims(c.handle))
 _tags(c::Channel)     = _build_tags(c.handle,
@@ -191,7 +191,7 @@ struct Test
     parent::Any   # keeps SieFile alive
 end
 
-_id(t::Test)        = Int(L.sie_test_id(t.handle))
+_id(t::Test)        = Int(L.sie_test_id(t.handle)) + 1
 _name(t::Test)      = _ptrlen_to_string(L.sie_test_name, t.handle)
 _nchannels(t::Test) = Int(L.sie_test_num_channels(t.handle))
 _tags(t::Test)      = _build_tags(t.handle,
