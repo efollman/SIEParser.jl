@@ -10,7 +10,7 @@ high-level type is:
 
 * [`SieFile`](@ref) — an opened SIE file, opened with [`opensie`](@ref) and
   explored via dot-property accessors (`f.tests`, `t.channels`,
-  `ch.dimensions`, `x.tags`, `x.id`, `x.name`).
+  `ch.dims`, `x.tags`, `x.id`, `x.name`).
 
 Per-dimension data is accessed by indexing the [`Dimension`](@ref):
 `dim[i]` (single sample, fetches only the containing block), `dim[a:b]`
@@ -28,7 +28,7 @@ using SomatSIE
 
 opensie("myfile.sie") do f
     for t in f.tests, ch in t.channels
-        for dim in ch.dimensions
+        for dim in ch.dims
             data = collect(dim)        # Vector{Float64} or Vector{Vector{UInt8}}
             sr = get(ch.tags, "core:sample_rate", nothing)
             println(ch.name, " dim ", dim.id, " ", length(data), " sr=", sr)

@@ -19,7 +19,7 @@ opensie("myfile.sie") do f
     println("file: ", length(f.tests), " tests")
 
     for t in f.tests, ch in t.channels
-        for dim in ch.dimensions
+        for dim in ch.dims
             # A `Dimension` behaves like a 1-D collection of samples:
             #   * `collect(dim)` (alias `dim[:]`) returns the full vector —
             #       `:float64` columns -> Vector{Float64} of engineering values
@@ -38,7 +38,7 @@ end
 
 `SieFile`, `Test`, `Channel`, and `Dimension` all expose their public
 accessors as dot properties — `f.tests`, `f.tags`, `t.id`, `t.name`,
-`t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dimensions`, `ch.tags`,
+`t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`,
 `dim.id`, `dim.name`, `dim.tags`. There are no equivalent exported
 accessor functions; use the property syntax everywhere.
 
@@ -83,7 +83,7 @@ materializes the entire dimension into a typed `Vector{Float64}` (or
 bulk per-block getters — one `ccall` per block, not per sample.
 
 Navigation: dot-property accessors `f.tests`, `t.channels`,
-`ch.dimensions`, `x.tags`, plus `findchannel(test, name)`. Channels
+`ch.dims`, `x.tags`, plus `findchannel(test, name)`. Channels
 live under tests — `f.channels` raises an error because channel ids
 may collide between tests; iterate with
 `for t in f.tests, ch in t.channels`. Use `length(f.tests)`,

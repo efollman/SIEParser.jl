@@ -55,8 +55,8 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                     @test c isa SomatSIE.Channel
                     @test c.id isa Integer
                     @test c.id >= 1
-                    @test length(c.dimensions) >= 1
-                    for d in c.dimensions
+                    @test length(c.dims) >= 1
+                    for d in c.dims
                         @test d.id isa Integer
                         @test d.id >= 1
                     end
@@ -77,16 +77,16 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             c = first(t.channels)
             @test c.id isa Integer
             @test c.name isa AbstractString
-            @test c.dimensions isa Vector
+            @test c.dims isa Vector
             @test c.tags isa Tags
-            d = first(c.dimensions)
+            d = first(c.dims)
             @test d.id isa Integer
             @test d.name isa AbstractString
             @test d.tags isa Tags
             # propertynames advertises the dot-public surface
             @test :tests in propertynames(f)
             @test :id    in propertynames(t)
-            @test :dimensions in propertynames(c)
+            @test :dims  in propertynames(c)
             # SieFile has no `channels` property — must go through tests
             @test_throws ErrorException f.channels
         end
@@ -110,7 +110,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                 for c in t.channels
                     ct = c.tags
                     @test length(ct) >= 0
-                    for d in c.dimensions
+                    for d in c.dims
                         dt = d.tags
                         @test length(dt) >= 0
                     end
@@ -129,12 +129,12 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                 for out in s
                     @test out isa Output
                     @test numrows(out) >= 0
-                    @test numdims(out) == length(ch.dimensions)
+                    @test numdims(out) == length(ch.dims)
                     total += numrows(out)
                 end
             end
             # Materialize each dimension separately
-            for dim in ch.dimensions
+            for dim in ch.dims
                 v = collect(dim)
                 @test v isa AbstractVector
                 # Float64 column → Vector{Float64}; raw → Vector{Vector{UInt8}}
@@ -147,7 +147,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
     @testset "Dimension as a vector (indexing / collect)" begin
         opensie(FILE_MIN) do f
             ch = first(first(f.tests).channels)
-            for dim in ch.dimensions
+            for dim in ch.dims
                 full = collect(dim)
                 n    = length(full)
                 @test length(dim) == n
@@ -203,7 +203,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                 @test length(allchans) > 1
                 # Read a handful of channels' first dimension and assert it works
                 for c in first(allchans, min(3, length(allchans)))
-                    v = collect(first(c.dimensions))
+                    v = collect(first(c.dims))
                     @test v isa AbstractVector
                     @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
                 end

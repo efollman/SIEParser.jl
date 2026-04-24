@@ -19,7 +19,7 @@ materialized via `collect(dim)` (or `dim[:]`).
 
 > Public accessors on `SieFile`, `Test`, `Channel`, and `Dimension` are
 > exposed as **dot properties** \u2014 `f.tests`, `t.channels`,
-> `ch.dimensions`, `dim.id`, `x.name`, `x.tags`, etc. There are no
+> `ch.dims`, `dim.id`, `x.name`, `x.tags`, etc. There are no
 > matching exported functions; use the property syntax everywhere.
 
 ---
@@ -142,7 +142,7 @@ from the libsie/file 0-based convention — Julia code is uniformly
 
 Channel name.
 
-### `ch.dimensions -> Vector{Dimension}`
+### `ch.dims -> Vector{Dimension}`
 
 All dimensions ("columns") of the channel, as a `Vector`. Use `length`
 for a count. For a sequential time-history channel this is typically
@@ -247,7 +247,7 @@ same bulk getters but only on the overlapping blocks.
 ```julia
 opensie("can.sie") do f
     for t in f.tests, ch in t.channels
-        for dim in ch.dimensions
+        for dim in ch.dims
             data  = collect(dim)            # or: dim[:]
             units = get(dim.tags, "core:units", nothing)
             @show ch.name, dim.id, eltype(data), length(data), units
@@ -271,12 +271,12 @@ Functions:
 
 Navigation and identity are accessed as **dot properties** on the
 returned types (`f.tests`, `f.tags`, `t.id`, `t.name`, `t.channels`,
-`t.tags`, `ch.id`, `ch.name`, `ch.dimensions`, `ch.tags`, `dim.id`,
+`t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`, `dim.id`,
 `dim.name`, `dim.tags`) — there are no exported `tests` / `channels` /
 `dimensions` / `tags` / `id` / `name` functions.
 
 > Counts are obtained via `length(f.tests)`, `length(t.channels)`,
-> `length(ch.dimensions)`, `length(x.tags)`.
+> `length(ch.dims)`, `length(x.tags)`.
 >
 > Channels live under tests. `f.channels` raises an error because
 > channel ids may collide between tests; iterate with
@@ -284,7 +284,7 @@ returned types (`f.tests`, `f.tags`, `t.id`, `t.name`, `t.channels`,
 > `[ch for t in f.tests for ch in t.channels]`).
 
 > Per-element positional access is via vector indexing, e.g.
-> `f.tests[1]`, `f.tests[1].channels[1]`, `ch.dimensions[1]`.
+> `f.tests[1]`, `f.tests[1].channels[1]`, `ch.dims[1]`.
 
 > Spigot, Output, Stream, and Histogram types and functions are kept
 > internal (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`,
