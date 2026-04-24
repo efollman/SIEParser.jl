@@ -50,7 +50,6 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             for t in ts
                 @test t.id isa Integer
                 @test t.id >= 1
-                @test t.name isa AbstractString
                 for c in t.channels
                     @test c isa SomatSIE.Channel
                     @test c.id isa Integer
@@ -71,7 +70,6 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
         opensie(FILE_MIN) do f
             t = first(f.tests)
             @test t.id isa Integer
-            @test t.name isa AbstractString
             @test t.channels isa Vector
             @test t.tags isa Tags
             c = first(t.channels)
@@ -81,7 +79,6 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             @test c.tags isa Tags
             d = first(c.dims)
             @test d.id isa Integer
-            @test d.name isa AbstractString
             @test d.tags isa Tags
             # propertynames advertises the dot-public surface
             @test :tests in propertynames(f)

@@ -94,13 +94,12 @@ end
 
 A single axis ("column") of a [`Channel`](@ref). Borrowed from the channel.
 
-Access identity and metadata via dot syntax: `dim.id`, `dim.name`,
-`dim.tags`. Index it like a vector — `dim[i]` returns a single sample
-(reading only the block that contains it), `dim[a:b]` returns a range
-(reading only the overlapping blocks), and `collect(dim)` (or `dim[:]`)
-materializes the entire data series as a typed Julia vector
-(`Vector{Float64}` for float columns, `Vector{Vector{UInt8}}` for raw
-columns).
+Access identity and metadata via dot syntax: `dim.id`, `dim.tags`. Index
+it like a vector — `dim[i]` returns a single sample (reading only the
+block that contains it), `dim[a:b]` returns a range (reading only the
+overlapping blocks), and `collect(dim)` (or `dim[:]`) materializes the
+entire data series as a typed Julia vector (`Vector{Float64}` for float
+columns, `Vector{Vector{UInt8}}` for raw columns).
 
 `dim.id` is **1-based** (1 is typically time, 2 is value for sequential
 time-series channels) — the libsie/file underlying convention is
@@ -112,21 +111,19 @@ struct Dimension
 end
 
 _id(d::Dimension)   = Int(L.sie_dimension_index(d.handle)) + 1
-_name(d::Dimension) = _ptrlen_to_string(L.sie_dimension_name, d.handle)
 _tags(d::Dimension) = _build_tags(d.handle,
     Int(L.sie_dimension_num_tags(d.handle)), L.sie_dimension_tag)
 
 function Base.getproperty(d::Dimension, sym::Symbol)
     sym === :id   && return _id(d)
-    sym === :name && return _name(d)
     sym === :tags && return _tags(d)
     return getfield(d, sym)
 end
 Base.propertynames(::Dimension, private::Bool = false) =
-    private ? (:id, :name, :tags, :handle, :parent) : (:id, :name, :tags)
+    private ? (:id, :tags, :handle, :parent) : (:id, :tags)
 
 Base.show(io::IO, d::Dimension) =
-    print(io, "Dimension(", _id(d), ", ", repr(_name(d)), ")")
+    print(io, "Dimension(", _id(d), ")")
 
 # ── Vector-like access on Dimension ─────────────────────────────────────────
 #
@@ -248,7 +245,10 @@ end
 
 A data series within a [`SieFile`](@ref). Borrowed from the file.
 
-Access via dot syntax: `ch.id`, `ch.name`, `ch.dims`, `ch.tags`.
+Access via dot syntax: `ch.id`, `ch.name`, `ch.dims`, `ch.tags`, plus the
+convenience accessors `ch.schema` (the `core:schema` tag, or `nothing`)
+and `ch.sr` (the `core:sample_rate` tag parsed as `UInt`, falling back to
+`Float64`, or `nothing` if unset).
 """
 struct Channel
     handle::Ptr{Cvoid}
@@ -260,6 +260,25 @@ _name(c::Channel)     = _ptrlen_to_string(L.sie_channel_name, c.handle)
 _numdims(c::Channel)  = Int(L.sie_channel_num_dims(c.handle))
 _tags(c::Channel)     = _build_tags(c.handle,
     Int(L.sie_channel_num_tags(c.handle)), L.sie_channel_tag)
+
+# `core:schema` tag, or `nothing` if absent. Returned as-is from the tag
+# dict (typically a `String`).
+function _schema(c::Channel)
+    v = get(_tags(c), "core:schema", nothing)
+    return v
+end
+
+# `core:sample_rate` tag parsed as a number, or `nothing` if absent.
+# Tries `UInt` first; falls back to `Float64` for non-integer rates.
+# `Vector{UInt8}` tag values are interpreted as UTF-8 first.
+function _sample_rate(c::Channel)
+    v = get(_tags(c), "core:sample_rate", nothing)
+    v === nothing && return nothing
+    s = v isa AbstractString ? v : String(copy(v))
+    u = tryparse(UInt, s)
+    u !== nothing && return u
+    return tryparse(Float64, s)
+end
 
 function _dimension(c::Channel, i::Integer)
     1 <= i <= _numdims(c) || throw(BoundsError(c, i))
@@ -274,11 +293,13 @@ function Base.getproperty(c::Channel, sym::Symbol)
     sym === :name       && return _name(c)
     sym === :dims       && return _dimensions(c)
     sym === :tags       && return _tags(c)
+    sym === :schema     && return _schema(c)
+    sym === :sr         && return _sample_rate(c)
     return getfield(c, sym)
 end
 Base.propertynames(::Channel, private::Bool = false) =
-    private ? (:id, :name, :dims, :tags, :handle, :parent) :
-              (:id, :name, :dims, :tags)
+    private ? (:id, :name, :dims, :tags, :schema, :sr, :handle, :parent) :
+              (:id, :name, :dims, :tags, :schema, :sr)
 
 Base.show(io::IO, c::Channel) =
     print(io, "Channel(id=", _id(c), ", name=", repr(_name(c)),
@@ -299,7 +320,6 @@ struct Test
 end
 
 _id(t::Test)        = Int(L.sie_test_id(t.handle)) + 1
-_name(t::Test)      = _ptrlen_to_string(L.sie_test_name, t.handle)
 _nchannels(t::Test) = Int(L.sie_test_num_channels(t.handle))
 _tags(t::Test)      = _build_tags(t.handle,
     Int(L.sie_test_num_tags(t.handle)), L.sie_test_tag)
@@ -314,17 +334,16 @@ _channels(t::Test) = [_channel(t, i) for i in 1:_nchannels(t)]
 
 function Base.getproperty(t::Test, sym::Symbol)
     sym === :id       && return _id(t)
-    sym === :name     && return _name(t)
     sym === :channels && return _channels(t)
     sym === :tags     && return _tags(t)
     return getfield(t, sym)
 end
 Base.propertynames(::Test, private::Bool = false) =
-    private ? (:id, :name, :channels, :tags, :handle, :parent) :
-              (:id, :name, :channels, :tags)
+    private ? (:id, :channels, :tags, :handle, :parent) :
+              (:id, :channels, :tags)
 
 Base.show(io::IO, t::Test) =
-    print(io, "Test(id=", _id(t), ", name=", repr(_name(t)),
+    print(io, "Test(id=", _id(t),
               ", nchannels=", _nchannels(t), ")")
 
 # ── SieFile ─────────────────────────────────────────────────────────────────

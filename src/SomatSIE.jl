@@ -10,7 +10,7 @@ high-level type is:
 
 * [`SieFile`](@ref) — an opened SIE file, opened with [`opensie`](@ref) and
   explored via dot-property accessors (`f.tests`, `t.channels`,
-  `ch.dims`, `x.tags`, `x.id`, `x.name`).
+  `ch.dims`, `x.tags`, `x.id`, `ch.name`).
 
 Per-dimension data is accessed by indexing the [`Dimension`](@ref):
 `dim[i]` (single sample, fetches only the containing block), `dim[a:b]`

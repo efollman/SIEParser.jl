@@ -37,9 +37,9 @@ end
 ```
 
 `SieFile`, `Test`, `Channel`, and `Dimension` all expose their public
-accessors as dot properties — `f.tests`, `f.tags`, `t.id`, `t.name`,
+accessors as dot properties — `f.tests`, `f.tags`, `t.id`,
 `t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`,
-`dim.id`, `dim.name`, `dim.tags`. There are no equivalent exported
+`dim.id`, `dim.tags`. There are no equivalent exported
 accessor functions; use the property syntax everywhere.
 
 For sequential time-series channels, dimension `id == 1` is typically time and
@@ -90,9 +90,9 @@ may collide between tests; iterate with
 `length(t.channels)`, etc. for counts; index the returned `Vector`
 directly for positional access.
 
-Identity: `x.id`, `x.name`. All `id` properties (`t.id`, `ch.id`,
-`dim.id`) are **1-based** — unlike libsie's underlying 0-based
-convention. For `dim.id`, 1 is typically time and 2 is value on
+Identity: `x.id`; channels also have `ch.name`. All `id` properties
+(`t.id`, `ch.id`, `dim.id`) are **1-based** — unlike libsie's underlying
+0-based convention. For `dim.id`, 1 is typically time and 2 is value on
 sequential time-series channels.
 
 > Spigot, Output, Stream, and Histogram are intentionally kept internal

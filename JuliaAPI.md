@@ -19,7 +19,7 @@ materialized via `collect(dim)` (or `dim[:]`).
 
 > Public accessors on `SieFile`, `Test`, `Channel`, and `Dimension` are
 > exposed as **dot properties** \u2014 `f.tests`, `t.channels`,
-> `ch.dims`, `dim.id`, `x.name`, `x.tags`, etc. There are no
+> `ch.dims`, `dim.id`, `ch.name`, `x.tags`, etc. There are no
 > matching exported functions; use the property syntax everywhere.
 
 ---
@@ -108,10 +108,6 @@ do not use after the file is closed.
 **1-based** test id. Note: this differs from the libsie/file 0-based
 convention — Julia code is uniformly 1-based.
 
-### `test.name -> String`
-
-Human-readable test name.
-
 ### `test.channels -> Vector{Channel}`
 
 All channels owned by the test, as a `Vector`. Use `length` for a count.
@@ -164,10 +160,6 @@ A single axis ("column") of a `Channel`. Borrowed from the channel.
 **1-based** dimension identifier (1 is typically time, 2 is value for
 sequential time-series channels). Note: this differs from the libsie/file
 0-based convention — Julia code is uniformly 1-based.
-
-### `dim.name -> String`
-
-Dimension name.
 
 ### `dim.tags -> Tags`
 
@@ -270,9 +262,9 @@ Functions:
 `opensie`, `findchannel`
 
 Navigation and identity are accessed as **dot properties** on the
-returned types (`f.tests`, `f.tags`, `t.id`, `t.name`, `t.channels`,
+returned types (`f.tests`, `f.tags`, `t.id`, `t.channels`,
 `t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`, `dim.id`,
-`dim.name`, `dim.tags`) — there are no exported `tests` / `channels` /
+`dim.tags`) — there are no exported `tests` / `channels` /
 `dimensions` / `tags` / `id` / `name` functions.
 
 > Counts are obtained via `length(f.tests)`, `length(t.channels)`,
