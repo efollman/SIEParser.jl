@@ -15,24 +15,30 @@
 ```julia
 using SomatSIE
 
-open(SomatSIE.SieFile, "myfile.sie") do f
+opensie("myfile.sie") do f
     @show libsie_version()
-    println("file: ", length(channels(f)), " channels in ", length(tests(f)), " tests")
+    println("file: ", length(f.tests), " tests")
 
-    for ch in channels(f)
-        for dim in dimensions(ch)
+    for t in f.tests, ch in t.channels
+        for dim in ch.dimensions
             # Per-dimension read returns a typed Julia vector:
             #   * `:float64` columns -> Vector{Float64} of engineering values
             #   * `:raw`     columns -> Vector{Vector{UInt8}} (e.g. CAN frames)
-            data  = read(f, dim)
-            units = get(tags(dim), "core:units", nothing)
-            println("  ", name(ch), " dim ", id(dim),
+            data  = readDim(dim)
+            units = get(dim.tags, "core:units", nothing)
+            println("  ", ch.name, " dim ", dim.id,
                     "  ", typeof(data), " len=", length(data),
-                    units === nothing ? "" : "  units=" * value(units))
+                    units === nothing ? "" : "  units=" * units)
         end
     end
 end
 ```
+
+`SieFile`, `Test`, `Channel`, and `Dimension` all expose their public
+accessors as dot properties — `f.tests`, `f.tags`, `t.id`, `t.name`,
+`t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dimensions`, `ch.tags`,
+`dim.id`, `dim.name`, `dim.tags`. There are no equivalent exported
+accessor functions; use the property syntax everywhere.
 
 For sequential time-series channels, dimension `id == 1` is typically time and
 dimension `id == 2` is the engineering value — read each separately and pair
@@ -42,49 +48,52 @@ them in your own code.
 
 | Type | Purpose |
 |------|---------|
-| `SieFile` | An opened SIE file. Owns the underlying handle; `close` it (or use `open(SieFile, path) do f ... end`). |
+| `SieFile` | An opened SIE file. Owns the underlying handle; `close` it (or use `opensie(path) do f ... end`). |
 | `SomatSIE.Test` | A test (acquisition session) within a file. Borrowed. |
 | `SomatSIE.Channel` | A data series. Borrowed. |
 | `SomatSIE.Dimension` | A single column/axis of a channel. Borrowed. |
-| `SomatSIE.Tag` | A key/value metadata entry. Value may be `String` or `Vector{UInt8}`. Borrowed. |
+| `SomatSIE.Tags` | A `Dict{String, Union{String, Vector{UInt8}}}` of metadata returned by `x.tags`. |
 
-Tags behave like a hybrid array/dict:
+Tags are plain Julia dicts:
 
 ```julia
-ts = tags(channel)            # SomatSIE.Tags collection
+ts = channel.tags             # Dict{String, Union{String, Vector{UInt8}}}
 length(ts)                    # number of tags
-for t in ts; @show key(t), value(t); end
-ts[1]                         # by 1-based index -> Tag
-ts["core:sample_rate"]        # by key -> Tag (throws KeyError if missing)
+for (k, v) in ts; @show k, v; end
+ts["core:sample_rate"]        # value (String or Vector{UInt8}); throws KeyError if missing
 get(ts, "core:units", nothing)
 haskey(ts, "core:schema")
 ```
 
 ## API surface
 
-Core types: `SieFile`, `Tag`, `Tags`, `SieError`, plus the unexported
-`SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`.
+Core types: `SieFile`, `Tags`, `SieError`, plus the unexported
+`SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`. `Tags` is a
+type alias for `Dict{String, Union{String, Vector{UInt8}}}`.
 
-Navigation: `channels`, `tests`, `dimensions`, `tags`, `findchannel`,
-`findtest`, `containingtest`. Use `length(channels(f))` etc. for counts;
-index the returned `Vector` directly for positional access.
+Opening / reading: `opensie(path) do f ... end` to open a file (the
+do-block guarantees the handle is released); `readDim(dim)` to
+materialize a dimension into a typed `Vector{Float64}` (or
+`Vector{Vector{UInt8}}` for raw columns). Internally `readDim` uses
+libsie's bulk per-block getters \u2014 one `ccall` per block, not per sample.
 
-Identity: `id`, `testid`, `name`. Note `id(::Dimension)` is **1-based**
-(1 is typically time, 2 is value) — unlike libsie's underlying 0-based
+Navigation: dot-property accessors `f.tests`, `t.channels`,
+`ch.dimensions`, `x.tags`, plus `findchannel(test, name)`. Channels
+live under tests — `f.channels` raises an error because channel ids
+may collide between tests; iterate with
+`for t in f.tests, ch in t.channels`. Use `length(f.tests)`,
+`length(t.channels)`, etc. for counts; index the returned `Vector`
+directly for positional access.
+
+Identity: `x.id`, `x.name`. Note `dim.id` is **1-based** (1 is
+typically time, 2 is value) — unlike libsie's underlying 0-based
 convention.
-
-Reading data: `read(file, dim)` — returns `Vector{Float64}` for float
-columns or `Vector{Vector{UInt8}}` for raw columns. `read!(file, dim,
-dest)` for in-place float reads.
-
-Tag inspection: `key`, `value`, `valuesize`, `isstring`, `isbinary`,
-`group`, `isfromgroup`.
 
 Library info: `libsie_version`.
 
 > Spigot, Output, Stream, and Histogram are intentionally kept internal
 > (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`, …) so the
-> public surface stays small. Prefer `read(file, dim)`; the streaming
+> public surface stays small. Prefer `readDim(dim)`; the streaming
 > layer is reserved for future optimization work.
 
 ## Limitations
@@ -93,7 +102,7 @@ The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however 
 
 ## Versioning
 
-This is a major rewrite (v0.3). Earlier `0.x` versions of `SomatSIE.jl` parsed SIE files in pure Julia and returned a nested `Dict` from `parseSIE(path)`. That API is gone — use `read(open(SieFile, path) do f ... end, dim)` (or the explicit form) and walk the `file → channel → dimension` tree.
+This is a major rewrite (v0.3). Earlier `0.x` versions of `SomatSIE.jl` parsed SIE files in pure Julia and returned a nested `Dict` from `parseSIE(path)`. That API is gone — use `opensie(path) do f ... end` and walk the `file → channel → dimension` tree, calling `readDim(dim)` to materialize data.
 
 ## License
 
