@@ -100,7 +100,7 @@ end
 This single up-front walk costs one ccall per block (`numrows(out)`) and
 nothing more. The spigot is then ready for on-demand block fetches.
 
-### The persistent spigot (Option 3)
+### The persistent spigot
 
 `cache.spigot` is reused across **all** subsequent block fetches for that
 channel. `_advance_to(cache, target)` advances it forward via `next!`
@@ -112,7 +112,7 @@ where the spigot is positioned.
 This eliminates the per-call `sie_spigot_new` / `sie_spigot_free` churn
 that the previous implementation incurred for every `dim[i]`.
 
-### The block LRU (Option 2)
+### The block LRU
 
 Hits are keyed on `(block_idx, dim_id)`. Values are typed Julia vectors,
 **not** libsie `Output` objects — `Output` handles are invalidated by the
