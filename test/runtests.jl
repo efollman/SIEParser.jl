@@ -1,7 +1,7 @@
 using Test
 using SomatSIE
-using SomatSIE: SieFile, Spigot, Stream, Tags, Output, libsie_version,
-                opensie, readDim, findchannel,
+using SomatSIE: SieFile, Spigot, Stream, Tags, Output,
+                opensie, findchannel,
                 spigot,
                 next!, numrows, numdims, numblocks, block, coltype,
                 getfloat64,
@@ -20,12 +20,6 @@ const FILE_VBM   = joinpath(DATA, "sie_comprehensive_VBM_DE81A7BA.sie")
 const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
 
 @testset "SomatSIE.jl" begin
-
-    @testset "library info" begin
-        v = libsie_version()
-        @test v isa AbstractString
-        @test !isempty(v)
-    end
 
     @testset "open/close" begin
         @test isfile(FILE_MIN)
@@ -125,7 +119,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
         end
     end
 
-    @testset "spigot iteration & readDim(dim)" begin
+    @testset "spigot iteration & collect(dim)" begin
         opensie(FILE_MIN) do f
             ch = first(first(f.tests).channels)
             # Iterate the spigot directly
@@ -141,11 +135,43 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             end
             # Materialize each dimension separately
             for dim in ch.dimensions
-                v = readDim(dim)
+                v = collect(dim)
                 @test v isa AbstractVector
                 # Float64 column → Vector{Float64}; raw → Vector{Vector{UInt8}}
                 @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
                 @test length(v) >= 0
+            end
+        end
+    end
+
+    @testset "Dimension as a vector (indexing / collect)" begin
+        opensie(FILE_MIN) do f
+            ch = first(first(f.tests).channels)
+            for dim in ch.dimensions
+                full = collect(dim)
+                n    = length(full)
+                @test length(dim) == n
+                @test size(dim)   == (n,)
+                @test eltype(dim) === eltype(full)
+                # dim[:] equals collect(dim)
+                @test dim[:]       == full
+                if n > 0
+                    @test dim[1]      == full[1]
+                    @test dim[end]    == full[end]
+                    @test firstindex(dim) == 1
+                    @test lastindex(dim)  == n
+                    mid = (n + 1) ÷ 2
+                    @test dim[mid] == full[mid]
+                    # range read
+                    lo = mid
+                    hi = min(n, mid + 3)
+                    @test dim[lo:hi] == full[lo:hi]
+                    # iteration matches collect
+                    @test [x for x in dim] == full
+                end
+                # bounds
+                @test_throws BoundsError dim[0]
+                @test_throws BoundsError dim[n + 1]
             end
         end
     end
@@ -177,7 +203,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                 @test length(allchans) > 1
                 # Read a handful of channels' first dimension and assert it works
                 for c in first(allchans, min(3, length(allchans)))
-                    v = readDim(first(c.dimensions))
+                    v = collect(first(c.dimensions))
                     @test v isa AbstractVector
                     @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
                 end

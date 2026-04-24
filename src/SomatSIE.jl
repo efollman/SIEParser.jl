@@ -12,9 +12,12 @@ high-level type is:
   explored via dot-property accessors (`f.tests`, `t.channels`,
   `ch.dimensions`, `x.tags`, `x.id`, `x.name`).
 
-Per-dimension data is materialized with [`readDim`](@ref), which returns a
-typed Julia vector (`Vector{Float64}` for engineering values, or
-`Vector{Vector{UInt8}}` for raw payloads such as CAN frames).
+Per-dimension data is accessed by indexing the [`Dimension`](@ref):
+`dim[i]` (single sample, fetches only the containing block), `dim[a:b]`
+(range, fetches only the overlapping blocks), or `collect(dim)` /
+`dim[:]` for the full series — returning a typed Julia vector
+(`Vector{Float64}` for engineering values, or `Vector{Vector{UInt8}}`
+for raw payloads such as CAN frames).
 
 Tag values may be strings or arbitrary binary blobs — `x.tags` returns a
 `Dict{String, Union{String, Vector{UInt8}}}` ([`Tags`](@ref)).
@@ -24,10 +27,9 @@ Tag values may be strings or arbitrary binary blobs — `x.tags` returns a
 using SomatSIE
 
 opensie("myfile.sie") do f
-    @show SomatSIE.libsie_version()
     for t in f.tests, ch in t.channels
         for dim in ch.dimensions
-            data = readDim(dim)        # Vector{Float64} or Vector{Vector{UInt8}}
+            data = collect(dim)        # Vector{Float64} or Vector{Vector{UInt8}}
             sr = get(ch.tags, "core:sample_rate", nothing)
             println(ch.name, " dim ", dim.id, " ", length(data), " sr=", sr)
         end
@@ -46,8 +48,7 @@ include("api.jl")
 
 # Public surface
 export SieFile, Tags, SieError,
-       opensie, readDim,
-       findchannel,
-       libsie_version
+       opensie,
+       findchannel
 
 end # module SomatSIE

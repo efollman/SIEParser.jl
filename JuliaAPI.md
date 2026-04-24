@@ -8,7 +8,7 @@ The public API is intentionally small and is organized around a single
 top-level type — [`SieFile`](#siefile) — plus value/metadata types
 (`Test`, `Channel`, `Dimension`, `Tags`) and the `SieError` exception.
 Files are opened with [`opensie`](#siefile); per-dimension data is
-materialized with [`readDim`](#reading-data).
+materialized via `collect(dim)` (or `dim[:]`).
 
 > The libsie 0.3 ABI is **read-only**: there is no SIE writer.
 
@@ -26,7 +26,6 @@ materialized with [`readDim`](#reading-data).
 
 ## Table of Contents
 
-- [Library info](#library-info)
 - [Errors](#errors)
 - [`SieFile`](#siefile)
 - [`Test`](#test)
@@ -35,19 +34,6 @@ materialized with [`readDim`](#reading-data).
 - [`Tags`](#tags)
 - [Reading data](#reading-data)
 - [Quick reference: exported names](#quick-reference-exported-names)
-
----
-
-## Library info
-
-### `libsie_version() -> String`
-
-Return the version string of the underlying libsie shared library.
-
-```julia
-julia> SomatSIE.libsie_version()
-"0.3.x"
-```
 
 ---
 
@@ -221,10 +207,27 @@ units = haskey(ts, "core:units") ? ts["core:units"] : ""
 
 ## Reading data
 
-### `readDim(dim::Dimension) -> Vector`
+A `Dimension` behaves like a 1-D collection of samples. Use the standard
+indexing / iteration idioms:
 
-Read the entire data series for a single dimension into a Julia vector.
-The element type is chosen from the dimension's column type:
+| Idiom                       | What it returns                                   | What gets read                       |
+|-----------------------------|---------------------------------------------------|--------------------------------------|
+| `length(dim)` / `size(dim)` | sample count                                      | one spigot walk (no per-sample I/O)  |
+| `eltype(dim)`               | `Float64` or `Vector{UInt8}`                      | first block only                     |
+| `dim[i]`                    | one sample                                        | only the block containing row `i`    |
+| `dim[a:b]`                  | sub-range vector                                  | only the blocks overlapping `a:b`    |
+| `collect(dim)` / `dim[:]`   | full vector (`Float64` or `Vector{UInt8}`)        | every block, one bulk ccall each     |
+| `for x in dim ... end`      | iterates samples                                  | materializes once via `collect`      |
+
+`Dimension` is intentionally **not** a subtype of `AbstractVector` (the
+element type is data-dependent), but the methods above cover the common
+vector idioms.
+
+### `collect(dim::Dimension) -> Vector`
+
+Materialize the entire data series for a single dimension into a Julia
+vector. Equivalent to `dim[:]`. The element type is chosen from the
+dimension's column type:
 
 * `:float64` columns return a `Vector{Float64}` of engineering-scaled
   samples.
@@ -232,21 +235,23 @@ The element type is chosen from the dimension's column type:
   sample (e.g. CAN frames).
 * `:none` raises an error.
 
-`readDim` recovers the owning `SieFile` from the `Dimension` itself, so
-you never need to thread the file handle through the call.
+The `Dimension` recovers the owning `SieFile` itself, so you never need
+to thread the file handle through the call.
 
-Internally `readDim` walks the channel's spigot once and pulls each
-block via the libsie bulk getters (`sie_output_get_float64_range` /
+Internally walks the channel's spigot once and pulls each block via the
+libsie bulk getters (`sie_output_get_float64_range` /
 `sie_output_get_raw_range`) — one `ccall` per block, not per sample —
-so it is cheap even for multi-million-row channels.
+so it is cheap even for multi-million-row channels. `dim[a:b]` uses the
+same bulk getters but only on the overlapping blocks.
 
 ```julia
 opensie("can.sie") do f
     for t in f.tests, ch in t.channels
         for dim in ch.dimensions
-            data  = readDim(dim)
+            data  = collect(dim)            # or: dim[:]
             units = get(dim.tags, "core:units", nothing)
             @show ch.name, dim.id, eltype(data), length(data), units
+            @show dim[1], dim[end]          # cheap — single-block reads
         end
     end
 end
@@ -262,7 +267,7 @@ Types:
 
 Functions:
 
-`opensie`, `readDim`, `findchannel`, `libsie_version`
+`opensie`, `findchannel`
 
 Navigation and identity are accessed as **dot properties** on the
 returned types (`f.tests`, `f.tags`, `t.id`, `t.name`, `t.channels`,
@@ -283,5 +288,5 @@ returned types (`f.tests`, `f.tags`, `t.id`, `t.name`, `t.channels`,
 
 > Spigot, Output, Stream, and Histogram types and functions are kept
 > internal (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`,
-> …). Prefer `readDim(dim)` for typical use; the streaming layer is
-> reserved for future optimization work.
+> …). Prefer `collect(dim)` / `dim[i]` / `dim[a:b]` for typical use; the
+> streaming layer is reserved for future optimization work.

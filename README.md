@@ -16,15 +16,17 @@
 using SomatSIE
 
 opensie("myfile.sie") do f
-    @show libsie_version()
     println("file: ", length(f.tests), " tests")
 
     for t in f.tests, ch in t.channels
         for dim in ch.dimensions
-            # Per-dimension read returns a typed Julia vector:
-            #   * `:float64` columns -> Vector{Float64} of engineering values
-            #   * `:raw`     columns -> Vector{Vector{UInt8}} (e.g. CAN frames)
-            data  = readDim(dim)
+            # A `Dimension` behaves like a 1-D collection of samples:
+            #   * `collect(dim)` (alias `dim[:]`) returns the full vector —
+            #       `:float64` columns -> Vector{Float64} of engineering values
+            #       `:raw`     columns -> Vector{Vector{UInt8}} (e.g. CAN frames)
+            #   * `dim[i]` reads a single sample (only the containing block).
+            #   * `dim[a:b]` reads a sub-range (only the overlapping blocks).
+            data  = collect(dim)
             units = get(dim.tags, "core:units", nothing)
             println("  ", ch.name, " dim ", dim.id,
                     "  ", typeof(data), " len=", length(data),
@@ -72,10 +74,13 @@ Core types: `SieFile`, `Tags`, `SieError`, plus the unexported
 type alias for `Dict{String, Union{String, Vector{UInt8}}}`.
 
 Opening / reading: `opensie(path) do f ... end` to open a file (the
-do-block guarantees the handle is released); `readDim(dim)` to
-materialize a dimension into a typed `Vector{Float64}` (or
-`Vector{Vector{UInt8}}` for raw columns). Internally `readDim` uses
-libsie's bulk per-block getters \u2014 one `ccall` per block, not per sample.
+do-block guarantees the handle is released). Each `Dimension` behaves
+like a 1-D collection of samples: `dim[i]` reads a single sample (only
+the containing block is fetched), `dim[a:b]` reads a range (only the
+overlapping blocks are fetched), and `collect(dim)` (also `dim[:]`)
+materializes the entire dimension into a typed `Vector{Float64}` (or
+`Vector{Vector{UInt8}}` for raw columns). Internally these use libsie's
+bulk per-block getters — one `ccall` per block, not per sample.
 
 Navigation: dot-property accessors `f.tests`, `t.channels`,
 `ch.dimensions`, `x.tags`, plus `findchannel(test, name)`. Channels
@@ -90,12 +95,10 @@ Identity: `x.id`, `x.name`. All `id` properties (`t.id`, `ch.id`,
 convention. For `dim.id`, 1 is typically time and 2 is value on
 sequential time-series channels.
 
-Library info: `libsie_version`.
-
 > Spigot, Output, Stream, and Histogram are intentionally kept internal
 > (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`, …) so the
-> public surface stays small. Prefer `readDim(dim)`; the streaming
-> layer is reserved for future optimization work.
+> public surface stays small. Prefer `dim[i]` / `dim[a:b]` / `collect(dim)`;
+> the streaming layer is reserved for future optimization work.
 
 ## Limitations
 
@@ -103,7 +106,7 @@ The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however 
 
 ## Versioning
 
-This is a major rewrite (v0.3). Earlier `0.x` versions of `SomatSIE.jl` parsed SIE files in pure Julia and returned a nested `Dict` from `parseSIE(path)`. That API is gone — use `opensie(path) do f ... end` and walk the `file → channel → dimension` tree, calling `readDim(dim)` to materialize data.
+This is a major rewrite (v0.3). Earlier `0.x` versions of `SomatSIE.jl` parsed SIE files in pure Julia and returned a nested `Dict` from `parseSIE(path)`. That API is gone — use `opensie(path) do f ... end` and walk the `file → channel → dimension` tree, indexing each `dim` directly (`dim[i]`, `dim[a:b]`, `collect(dim)`) to materialize data.
 
 ## License
 

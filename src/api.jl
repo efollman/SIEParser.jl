@@ -27,7 +27,7 @@ Base.showerror(io::IO, e::SieError) =
     throw(SieError(Int(rc), L.sie_status_message(rc)))
 end
 
-# ── Helpers for (ptr, len) string returns ───────────────────────────────────
+# ── Helpers for (ptr, len) string returns ───────────────────────────────────────────
 
 function _ptrlen_to_string(getter, h)
     pref = Ref{Ptr{UInt8}}(C_NULL)
@@ -45,16 +45,6 @@ function _ptrlen_to_bytes(getter, h)
     (p == C_NULL || n == 0) ? UInt8[] : copy(unsafe_wrap(Array, p, n; own = false))
 end
 
-# ── Library info ────────────────────────────────────────────────────────────
-
-"""
-    libsie_version() -> String
-
-Return the version string of the underlying libsie shared library.
-"""
-libsie_version() = L.sie_version()
-
-# ── Tag ─────────────────────────────────────────────────────────────────────
 
 # ── Tags ────────────────────────────────────────────────────────────────────
 
@@ -105,8 +95,12 @@ end
 A single axis ("column") of a [`Channel`](@ref). Borrowed from the channel.
 
 Access identity and metadata via dot syntax: `dim.id`, `dim.name`,
-`dim.tags`. Use [`readDim`](@ref) to materialize the dimension's entire
-data series as a typed Julia vector.
+`dim.tags`. Index it like a vector — `dim[i]` returns a single sample
+(reading only the block that contains it), `dim[a:b]` returns a range
+(reading only the overlapping blocks), and `collect(dim)` (or `dim[:]`)
+materializes the entire data series as a typed Julia vector
+(`Vector{Float64}` for float columns, `Vector{Vector{UInt8}}` for raw
+columns).
 
 `dim.id` is **1-based** (1 is typically time, 2 is value for sequential
 time-series channels) — the libsie/file underlying convention is
@@ -133,6 +127,166 @@ Base.propertynames(::Dimension, private::Bool = false) =
 
 Base.show(io::IO, d::Dimension) =
     print(io, "Dimension(", _id(d), ", ", repr(_name(d)), ")")
+
+# ── Vector-like access on Dimension ─────────────────────────────────────────
+#
+# The methods below let you treat a `Dimension` as a 1-D collection of
+# samples without explicitly opening a spigot:
+#
+#   length(dim)         total sample count
+#   eltype(dim)         Float64 or Vector{UInt8} (probed once from libsie)
+#   dim[i]              one sample — only the containing block is fetched
+#   dim[a:b]            sub-range — only the overlapping blocks are fetched
+#   collect(dim)        full materialized vector
+#   dim[:]              same as collect(dim)
+#   for x in dim ...    iterates the materialized vector
+#
+# `Dimension` is intentionally not subtyped from `AbstractVector` because the
+# element type is data-dependent (float vs raw) and not known at construction
+# time. The helpers below cover the common cases without forcing that choice.
+
+# Forward declarations satisfied later in this file:
+#   numrows(file::SieFile, ch::Channel)
+#   coltype(out::Output, dim::Integer)
+#   getfloat64(out::Output, dim, row)
+#   getraw(out::Output, dim, row)
+#   spigot, next!, numrows(::Output)
+
+Base.length(d::Dimension)     = numrows(d.parent.parent::SieFile, d.parent::Channel)
+Base.size(d::Dimension)       = (length(d),)
+Base.firstindex(::Dimension)  = 1
+Base.lastindex(d::Dimension)  = length(d)
+Base.IteratorSize(::Type{Dimension}) = Base.HasLength()
+
+function Base.eltype(d::Dimension)
+    ch   = d.parent::Channel
+    file = ch.parent::SieFile
+    return spigot(file, ch) do s
+        out = next!(s)
+        out === nothing && return Float64
+        ct = coltype(out, _id(d))
+        ct === :float64 ? Float64           :
+        ct === :raw     ? Vector{UInt8}     :
+        error("dimension $(_id(d)) of channel '", _name(ch),
+              "' has no data type (:none)")
+    end
+end
+
+# Full materialization. `_readdim` (defined below) does the heavy lifting via
+# the libsie bulk range getters; `collect` and `dim[:]` are aliases for it so
+# that the standard Julia idioms produce a typed `Vector` without any extra
+# user code.
+Base.collect(d::Dimension)            = _readdim(d)
+Base.getindex(d::Dimension, ::Colon)  = _readdim(d)
+
+# Single-sample read. Walks the spigot block-by-block but skips ahead — only
+# the block whose row range contains `i` is actually read into Julia. The
+# per-sample C call is `sie_output_get_float64` / `sie_output_get_raw`.
+function Base.getindex(d::Dimension, i::Integer)
+    i >= 1 || throw(BoundsError(d, i))
+    ch     = d.parent::Channel
+    file   = ch.parent::SieFile
+    dimid  = _id(d)
+    target = Int(i) - 1   # 0-based row index across the channel
+    return spigot(file, ch) do s
+        offset = 0
+        while true
+            out = next!(s)
+            out === nothing && throw(BoundsError(d, i))
+            nr = numrows(out)
+            if target < offset + nr
+                row = target - offset + 1   # 1-based within the block
+                ct  = coltype(out, dimid)
+                ct === :float64 && return getfloat64(out, dimid, row)
+                ct === :raw     && return getraw(out, dimid, row)
+                error("dimension $dimid of channel '", _name(ch),
+                      "' has no data type (:none)")
+            end
+            offset += nr
+        end
+    end
+end
+
+# Range read. Walks the spigot once; for each block that overlaps `r`, makes
+# exactly one bulk-getter ccall over the overlapping sub-range and copies the
+# values straight into the output buffer.
+function Base.getindex(d::Dimension, r::AbstractUnitRange{<:Integer})
+    if isempty(r)
+        ct = eltype(d)
+        return ct === Float64 ? Float64[] : Vector{UInt8}[]
+    end
+    first(r) >= 1 || throw(BoundsError(d, first(r)))
+    ch    = d.parent::Channel
+    file  = ch.parent::SieFile
+    dimid = _id(d)
+    lo    = Int(first(r)) - 1   # 0-based, inclusive
+    hi    = Int(last(r))  - 1   # 0-based, inclusive
+    return spigot(file, ch) do s
+        offset  = 0
+        result  = nothing
+        ct      = :none
+        d0      = Csize_t(dimid - 1)
+        written = Ref{Csize_t}(0)
+        while true
+            out = next!(s)
+            out === nothing && break
+            nr        = numrows(out)
+            blk_start = offset
+            blk_end   = offset + nr - 1
+            offset   += nr
+            blk_end < lo && continue
+            blk_start > hi && break
+            local_lo = max(lo, blk_start) - blk_start  # 0-based row in block
+            local_hi = min(hi, blk_end)   - blk_start
+            count    = local_hi - local_lo + 1
+            dest_off = max(lo, blk_start) - lo         # 0-based dest offset
+            if result === nothing
+                ct = coltype(out, dimid)
+                if ct === :float64
+                    result = Vector{Float64}(undef, length(r))
+                elseif ct === :raw
+                    result = Vector{Vector{UInt8}}(undef, length(r))
+                else
+                    error("dimension $dimid of channel '", _name(ch),
+                          "' has no data type (:none)")
+                end
+            end
+            if ct === :float64
+                buf = result::Vector{Float64}
+                GC.@preserve buf _check(L.sie_output_get_float64_range(
+                    out.handle, d0, Csize_t(local_lo), Csize_t(count),
+                    pointer(buf, dest_off + 1), written))
+            else
+                ptrs  = Vector{Ptr{UInt8}}(undef, count)
+                sizes = Vector{UInt32}(undef, count)
+                GC.@preserve ptrs sizes _check(L.sie_output_get_raw_range(
+                    out.handle, d0, Csize_t(local_lo), Csize_t(count),
+                    pointer(ptrs), pointer(sizes), written))
+                buf = result::Vector{Vector{UInt8}}
+                @inbounds for k in 1:count
+                    p, n = ptrs[k], Int(sizes[k])
+                    buf[dest_off + k] = (p == C_NULL || n == 0) ? UInt8[] :
+                        copy(unsafe_wrap(Array, p, n; own = false))
+                end
+            end
+        end
+        result === nothing && throw(BoundsError(d, r))
+        return result
+    end
+end
+
+# Iteration: materialize once with `collect` and walk the resulting vector.
+# Cheaper than per-element indexing (which reopens a spigot per call) and
+# avoids the bookkeeping of holding a long-lived spigot across `iterate`
+# boundaries.
+function Base.iterate(d::Dimension)
+    v = collect(d)
+    return isempty(v) ? nothing : (v[1], (v, 2))
+end
+function Base.iterate(::Dimension, state)
+    v, i = state
+    return i > length(v) ? nothing : (v[i], (v, i + 1))
+end
 
 # ── Channel ─────────────────────────────────────────────────────────────────
 
@@ -231,7 +385,7 @@ do-block form so the underlying libsie handle is released automatically:
     opensie("myfile.sie") do f
         for t in f.tests, ch in t.channels
             for dim in ch.dimensions
-                println(ch.name, " dim ", dim.id, ": ", readDim(dim))
+                println(ch.name, " dim ", dim.id, ": ", collect(dim))
             end
         end
     end
@@ -538,9 +692,10 @@ function Base.iterate(s::Spigot, _state = nothing)
 end
 
 """
-    readDim(dim::Dimension) -> Vector{Float64} | Vector{Vector{UInt8}}
+    _readdim(dim::Dimension) -> Vector{Float64} | Vector{Vector{UInt8}}
 
-Read the entire data series for a single dimension into a Julia vector.
+Internal: read the entire data series for a single dimension into a
+Julia vector. Backs `collect(dim)` and `dim[:]`.
 
 The element type is chosen from the dimension's column type:
 
@@ -548,25 +703,11 @@ The element type is chosen from the dimension's column type:
 * `:raw`     columns return a `Vector{Vector{UInt8}}`, one byte string per
   sample (e.g. CAN frames).
 
-Internally walks the channel's spigot once and pulls each block via the
-libsie bulk getters (`sie_output_get_float64_range` /
-`sie_output_get_raw_range`), so each block costs a single `ccall` instead
-of one per sample.
-
-# Example
-```julia
-opensie("can.sie") do f
-    for ch in channels(f)
-        for dim in dimensions(ch)
-            data  = readDim(dim)            # typed per-dim vector
-            units = get(tags(dim), "core:units", nothing)
-            @show name(ch), id(dim), eltype(data), length(data), units
-        end
-    end
-end
-```
+Walks the channel's spigot once and pulls each block via the libsie bulk
+getters (`sie_output_get_float64_range` / `sie_output_get_raw_range`), so
+each block costs a single `ccall` instead of one per sample.
 """
-function readDim(dim::Dimension)
+function _readdim(dim::Dimension)
     ch   = dim.parent::Channel
     file = ch.parent::SieFile
     d    = _id(dim)   # 1-based
@@ -614,7 +755,7 @@ function readDim(dim::Dimension)
             end
             return buf
         else
-            error("dimension $(id(dim)) of channel '", name(ch),
+            error("dimension $(_id(dim)) of channel '", _name(ch),
                   "' has no data type (:none)")
         end
     end
