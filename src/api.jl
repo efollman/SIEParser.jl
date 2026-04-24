@@ -27,7 +27,7 @@ Base.showerror(io::IO, e::SieError) =
     throw(SieError(Int(rc), L.sie_status_message(rc)))
 end
 
-# ── Helpers for (ptr, len) string returns ───────────────────────────────────
+# ── Helpers for (ptr, len) string returns ───────────────────────────────────────────
 
 function _ptrlen_to_string(getter, h)
     pref = Ref{Ptr{UInt8}}(C_NULL)
@@ -45,114 +45,46 @@ function _ptrlen_to_bytes(getter, h)
     (p == C_NULL || n == 0) ? UInt8[] : copy(unsafe_wrap(Array, p, n; own = false))
 end
 
-# ── Library info ────────────────────────────────────────────────────────────
+
+# ── Tags ────────────────────────────────────────────────────────────────────
 
 """
-    libsie_version() -> String
+    Tags
 
-Return the version string of the underlying libsie shared library.
+Type alias for `Dict{String, Union{String, Vector{UInt8}}}` — the result of
+calling [`tags`](@ref) on a [`SieFile`](@ref), [`Test`](@ref),
+[`Channel`](@ref), or [`Dimension`](@ref).
+
+Each entry maps a tag key to its value. Textual tags map to `String`; binary
+blob tags (rare; e.g. arbitrary payloads) map to `Vector{UInt8}`. Use the
+normal `Dict` API: `length`, iteration, `tags[k]`, `get(tags, k, default)`,
+`haskey(tags, k)`, `keys(tags)`, `values(tags)`.
+
+```julia
+ts = tags(ch)
+sr = get(ts, "core:sample_rate", nothing)
+```
 """
-libsie_version() = L.sie_version()
+const Tags = Dict{String, Union{String, Vector{UInt8}}}
 
-# ── Tag ─────────────────────────────────────────────────────────────────────
-
-"""
-    Tag
-
-A key/value metadata entry attached to a [`SieFile`](@ref), [`Test`](@ref),
-[`Channel`](@ref) or [`Dimension`](@ref). Values may be strings or arbitrary
-binary blobs (use [`isbinary`](@ref) / [`isstring`](@ref) to distinguish).
-
-Borrowed from its parent — does not need explicit cleanup.
-"""
-struct Tag
-    handle::Ptr{Cvoid}
-end
-
-handle(t::Tag) = t.handle
-
-key(t::Tag)         = _ptrlen_to_string(L.sie_tag_key, t.handle)
-isstring(t::Tag)    = L.sie_tag_is_string(t.handle) != 0
-isbinary(t::Tag)    = L.sie_tag_is_binary(t.handle) != 0
-valuesize(t::Tag)   = Int(L.sie_tag_value_size(t.handle))
-
-"""
-    value(t::Tag) -> Union{String, Vector{UInt8}}
-
-Return the tag value as a `String` if the tag is textual, otherwise as a
-`Vector{UInt8}` copy of the binary payload.
-"""
-function value(t::Tag)
-    isstring(t) ? _ptrlen_to_string(L.sie_tag_value, t.handle) :
-                  _ptrlen_to_bytes(L.sie_tag_value, t.handle)
-end
-
-group(t::Tag) = Int(L.sie_tag_group(t.handle))
-isfromgroup(t::Tag) = L.sie_tag_is_from_group(t.handle) != 0
-
-Base.show(io::IO, t::Tag) = print(io, "Tag(", repr(key(t)), " => ",
-    isstring(t) ? repr(value(t)) : string("<binary ", valuesize(t), " bytes>"), ")")
-
-# ── Tag collections (lazy, dict-like) ───────────────────────────────────────
-
-"""
-    Tags(parent, count, getter, finder)
-
-Iterable, indexable, dict-like view of the tag list owned by `parent`.
-
-* `length(tags)`, iteration  — sequential access
-* `tags[i]`                  — 1-based positional access (returns `Tag`)
-* `tags[key::AbstractString]` — keyed access (returns `Tag`, throws `KeyError`)
-* `get(tags, key, default)`  — keyed access with default
-* `haskey(tags, key)`        — membership test
-"""
-struct Tags
-    parent::Any              # keeps owning object alive
-    count::Int
-    getter::Function         # (parent_handle, i0) -> tag handle
-    finder::Union{Function,Nothing}  # (parent_handle, key) -> tag handle or nothing
-end
-
-Base.length(t::Tags) = t.count
-Base.size(t::Tags) = (t.count,)
-Base.eltype(::Type{Tags}) = Tag
-Base.firstindex(::Tags) = 1
-Base.lastindex(t::Tags) = t.count
-
-function Base.getindex(t::Tags, i::Integer)
-    1 <= i <= t.count || throw(BoundsError(t, i))
-    h = t.getter(handle(t.parent), i - 1)
-    h == C_NULL ? throw(BoundsError(t, i)) : Tag(h)
-end
-
-function Base.getindex(t::Tags, k::AbstractString)
-    tag = _findtag(t, k)
-    tag === nothing ? throw(KeyError(k)) : tag
-end
-
-function _findtag(t::Tags, k::AbstractString)
-    t.finder === nothing && return _linearfind(t, k)
-    h = t.finder(handle(t.parent), k)
-    h == C_NULL ? nothing : Tag(h)
-end
-
-function _linearfind(t::Tags, k::AbstractString)
-    for i in 1:t.count
-        tag = t[i]
-        key(tag) == k && return tag
+# Internal: build a Tags dict from a libsie parent handle.
+#
+#   parent_handle  - opaque parent handle (file/test/channel/dimension)
+#   count          - number of tags
+#   getter         - (parent_handle, i0::Csize_t) -> tag handle
+function _build_tags(parent_handle::Ptr{Cvoid}, count::Integer, getter)
+    out = Tags()
+    sizehint!(out, count)
+    for i in 0:(count - 1)
+        h = getter(parent_handle, i)
+        h == C_NULL && continue
+        k = _ptrlen_to_string(L.sie_tag_key, h)
+        v = L.sie_tag_is_string(h) != 0 ?
+            _ptrlen_to_string(L.sie_tag_value, h) :
+            _ptrlen_to_bytes(L.sie_tag_value, h)
+        out[k] = v
     end
-    return nothing
-end
-
-Base.get(t::Tags, k::AbstractString, default) =
-    (tag = _findtag(t, k); tag === nothing ? default : tag)
-
-Base.haskey(t::Tags, k::AbstractString) = _findtag(t, k) !== nothing
-
-Base.iterate(t::Tags, i::Int = 1) = i > t.count ? nothing : (t[i], i + 1)
-
-function Base.show(io::IO, t::Tags)
-    print(io, "Tags(", t.count, ")")
+    return out
 end
 
 # ── Dimension ───────────────────────────────────────────────────────────────
@@ -162,32 +94,149 @@ end
 
 A single axis ("column") of a [`Channel`](@ref). Borrowed from the channel.
 
-Use [`index`](@ref) and [`name`](@ref) for identity, [`tags`](@ref) for
-per-dimension metadata, and `read(file, dim)` to materialize the dimension's
-entire data series as a typed Julia vector — see
-[`read(::SieFile, ::Dimension)`](@ref).
+Access identity and metadata via dot syntax: `dim.id`, `dim.tags`. Index
+it like a vector — `dim[i]` returns a single sample (reading only the
+block that contains it), `dim[a:b]` returns a range (reading only the
+overlapping blocks), and `collect(dim)` (or `dim[:]`) materializes the
+entire data series as a typed Julia vector (`Vector{Float64}` for float
+columns, `Vector{Vector{UInt8}}` for raw columns).
+
+`dim.id` is **1-based** (1 is typically time, 2 is value for sequential
+time-series channels) — the libsie/file underlying convention is
+0-based, but Julia code is uniformly 1-based.
 """
 struct Dimension
     handle::Ptr{Cvoid}
     parent::Any  # Channel — typed Any to avoid forward declaration; see ch field below
 end
 
-handle(d::Dimension) = d.handle
+_id(d::Dimension)   = Int(L.sie_dimension_index(d.handle)) + 1
+_tags(d::Dimension) = _build_tags(d.handle,
+    Int(L.sie_dimension_num_tags(d.handle)), L.sie_dimension_tag)
 
-"""
-    index(dim::Dimension) -> Int
-
-Zero-based dimension index (0 is typically time, 1 is value for sequential
-time-series channels).
-"""
-index(d::Dimension) = Int(L.sie_dimension_index(d.handle))
-name(d::Dimension)  = _ptrlen_to_string(L.sie_dimension_name, d.handle)
-
-tags(d::Dimension) = Tags(d, Int(L.sie_dimension_num_tags(d.handle)),
-    L.sie_dimension_tag, L.sie_dimension_find_tag)
+function Base.getproperty(d::Dimension, sym::Symbol)
+    sym === :id   && return _id(d)
+    sym === :tags && return _tags(d)
+    return getfield(d, sym)
+end
+Base.propertynames(::Dimension, private::Bool = false) =
+    private ? (:id, :tags, :handle, :parent) : (:id, :tags)
 
 Base.show(io::IO, d::Dimension) =
-    print(io, "Dimension(", index(d), ", ", repr(name(d)), ")")
+    print(io, "Dimension(", _id(d), ")")
+
+# ── Vector-like access on Dimension ─────────────────────────────────────────
+#
+# The methods below let you treat a `Dimension` as a 1-D collection of
+# samples without explicitly opening a spigot:
+#
+#   length(dim)         total sample count
+#   eltype(dim)         Float64 or Vector{UInt8} (probed once from libsie)
+#   dim[i]              one sample — only the containing block is fetched
+#   dim[a:b]            sub-range — only the overlapping blocks are fetched
+#   collect(dim)        full materialized vector
+#   dim[:]              same as collect(dim)
+#   for x in dim ...    iterates the materialized vector
+#
+# `Dimension` is intentionally not subtyped from `AbstractVector` because the
+# element type is data-dependent (float vs raw) and not known at construction
+# time. The helpers below cover the common cases without forcing that choice.
+
+# Forward declarations satisfied later in this file:
+#   ChannelCache, _channel_cache, _block_for, _locate_row
+
+Base.length(d::Dimension)     = _channel_cache(d.parent.parent::SieFile,
+                                                d.parent::Channel).total_rows
+Base.size(d::Dimension)       = (length(d),)
+Base.firstindex(::Dimension)  = 1
+Base.lastindex(d::Dimension)  = length(d)
+Base.IteratorSize(::Type{Dimension}) = Base.HasLength()
+
+# eltype probes the first block (cached afterwards). For empty channels we
+# default to `Float64` so that downstream `Vector{Float64}` allocations are
+# well-defined even when there is nothing to read.
+function Base.eltype(d::Dimension)
+    ch    = d.parent::Channel
+    file  = ch.parent::SieFile
+    dimid = _id(d)
+    cache = _channel_cache(file, ch)
+    haskey(cache.eltype_cache, dimid) && return cache.eltype_cache[dimid]
+    cache.nblocks == 0 && return Float64
+    _block_for(cache, dimid, 1)   # populates eltype_cache as a side effect
+    return cache.eltype_cache[dimid]
+end
+
+# Full materialization. Walks the channel via the persistent spigot,
+# decoding each block once via the libsie bulk range getters and caching
+# the result in the per-channel block LRU. Subsequent index/range/collect
+# calls hit the cache and avoid any new ccalls.
+Base.collect(d::Dimension)            = _readdim(d)
+Base.getindex(d::Dimension, ::Colon)  = _readdim(d)
+
+# Single-sample read. Translates the row index to (block_idx, row_in_block)
+# via the cached cumulative-row offsets (binary search on a small `Vector`),
+# then fetches the containing block from the cache (or decodes it once and
+# stores it).
+function Base.getindex(d::Dimension, i::Integer)
+    i >= 1 || throw(BoundsError(d, i))
+    ch    = d.parent::Channel
+    file  = ch.parent::SieFile
+    cache = _channel_cache(file, ch)
+    Int(i) > cache.total_rows && throw(BoundsError(d, i))
+    block_idx, row_in_block = _locate_row(cache, Int(i) - 1)
+    data = _block_for(cache, _id(d), block_idx)
+    return data[row_in_block + 1]
+end
+
+# Range read. Walks only the blocks overlapping the requested range. Each
+# such block is fetched through the cache (decoded once, then memoized), so
+# repeated `dim[a:b]` calls over the same neighborhood pay no further
+# decoding cost.
+function Base.getindex(d::Dimension, r::AbstractUnitRange{<:Integer})
+    if isempty(r)
+        return eltype(d) === Float64 ? Float64[] : Vector{UInt8}[]
+    end
+    first(r) >= 1 || throw(BoundsError(d, first(r)))
+    ch    = d.parent::Channel
+    file  = ch.parent::SieFile
+    cache = _channel_cache(file, ch)
+    Int(last(r)) > cache.total_rows && throw(BoundsError(d, last(r)))
+    dimid = _id(d)
+    lo0   = Int(first(r)) - 1   # 0-based, inclusive
+    hi0   = Int(last(r))  - 1   # 0-based, inclusive
+    blo, _ = _locate_row(cache, lo0)
+    bhi, _ = _locate_row(cache, hi0)
+    et = eltype(d)
+    result = et === Float64 ? Vector{Float64}(undef, length(r)) :
+                              Vector{Vector{UInt8}}(undef, length(r))
+    pos = 1
+    @inbounds for b in blo:bhi
+        block = _block_for(cache, dimid, b)
+        block_start0 = cache.offsets[b]
+        block_end0   = cache.offsets[b + 1] - 1
+        local_lo = max(lo0, block_start0) - block_start0
+        local_hi = min(hi0, block_end0)   - block_start0
+        n = local_hi - local_lo + 1
+        for k in 0:(n - 1)
+            result[pos + k] = block[local_lo + 1 + k]
+        end
+        pos += n
+    end
+    return result
+end
+
+# Iteration: materialize once with `collect` and walk the resulting vector.
+# Cheaper than per-element indexing (which reopens a spigot per call) and
+# avoids the bookkeeping of holding a long-lived spigot across `iterate`
+# boundaries.
+function Base.iterate(d::Dimension)
+    v = collect(d)
+    return isempty(v) ? nothing : (v[1], (v, 2))
+end
+function Base.iterate(::Dimension, state)
+    v, i = state
+    return i > length(v) ? nothing : (v[i], (v, i + 1))
+end
 
 # ── Channel ─────────────────────────────────────────────────────────────────
 
@@ -195,33 +244,66 @@ Base.show(io::IO, d::Dimension) =
     Channel
 
 A data series within a [`SieFile`](@ref). Borrowed from the file.
+
+Access via dot syntax: `ch.id`, `ch.name`, `ch.dims`, `ch.tags`, plus the
+convenience accessors `ch.schema` (the `core:schema` tag, or `nothing`)
+and `ch.sr` (the `core:sample_rate` tag parsed as `UInt`, falling back to
+`Float64`, or `nothing` if unset).
 """
 struct Channel
     handle::Ptr{Cvoid}
     parent::Any   # keeps SieFile alive
 end
 
-handle(c::Channel) = c.handle
+_id(c::Channel)       = Int(L.sie_channel_id(c.handle)) + 1
+_name(c::Channel)     = _ptrlen_to_string(L.sie_channel_name, c.handle)
+_numdims(c::Channel)  = Int(L.sie_channel_num_dims(c.handle))
+_tags(c::Channel)     = _build_tags(c.handle,
+    Int(L.sie_channel_num_tags(c.handle)), L.sie_channel_tag)
 
-id(c::Channel)      = Int(L.sie_channel_id(c.handle))
-testid(c::Channel)  = Int(L.sie_channel_test_id(c.handle))
-name(c::Channel)    = _ptrlen_to_string(L.sie_channel_name, c.handle)
-numdims(c::Channel) = Int(L.sie_channel_num_dims(c.handle))
+# `core:schema` tag, or `nothing` if absent. Returned as-is from the tag
+# dict (typically a `String`).
+function _schema(c::Channel)
+    v = get(_tags(c), "core:schema", nothing)
+    return v
+end
 
-function dimension(c::Channel, i::Integer)
-    1 <= i <= numdims(c) || throw(BoundsError(c, i))
+# `core:sample_rate` tag parsed as a number, or `nothing` if absent.
+# Tries `UInt` first; falls back to `Float64` for non-integer rates.
+# `Vector{UInt8}` tag values are interpreted as UTF-8 first.
+function _sample_rate(c::Channel)
+    v = get(_tags(c), "core:sample_rate", nothing)
+    v === nothing && return nothing
+    s = v isa AbstractString ? v : String(copy(v))
+    u = tryparse(UInt, s)
+    u !== nothing && return u
+    return tryparse(Float64, s)
+end
+
+function _dimension(c::Channel, i::Integer)
+    1 <= i <= _numdims(c) || throw(BoundsError(c, i))
     h = L.sie_channel_dimension(c.handle, i - 1)
     h == C_NULL ? throw(BoundsError(c, i)) : Dimension(h, c)
 end
 
-dimensions(c::Channel) = [dimension(c, i) for i in 1:numdims(c)]
+_dimensions(c::Channel) = [_dimension(c, i) for i in 1:_numdims(c)]
 
-tags(c::Channel) = Tags(c, Int(L.sie_channel_num_tags(c.handle)),
-    L.sie_channel_tag, L.sie_channel_find_tag)
+function Base.getproperty(c::Channel, sym::Symbol)
+    sym === :id         && return _id(c)
+    sym === :name       && return _name(c)
+    sym === :dims       && return _dimensions(c)
+    sym === :tags       && return _tags(c)
+    sym === :schema     && return _schema(c)
+    sym === :sr         && return _sample_rate(c)
+    return getfield(c, sym)
+end
+Base.propertynames(::Channel, private::Bool = false) =
+    private ? (:id, :name, :dims, :tags, :schema, :sr, :handle, :parent) :
+              (:id, :name, :dims, :tags, :schema, :sr)
 
 Base.show(io::IO, c::Channel) =
-    print(io, "Channel(id=", id(c), ", name=", repr(name(c)),
-              ", ndims=", numdims(c), ")")
+    print(io, "Channel(id=", _id(c), ", name=", repr(_name(c)),
+              ", ndims=", _numdims(c), ")")
 
 # ── Test ────────────────────────────────────────────────────────────────────
 
@@ -237,51 +319,62 @@ struct Test
     parent::Any   # keeps SieFile alive
 end
 
-handle(t::Test) = t.handle
+_id(t::Test)        = Int(L.sie_test_id(t.handle)) + 1
+_nchannels(t::Test) = Int(L.sie_test_num_channels(t.handle))
+_tags(t::Test)      = _build_tags(t.handle,
+    Int(L.sie_test_num_tags(t.handle)), L.sie_test_tag)
 
-id(t::Test)   = Int(L.sie_test_id(t.handle))
-name(t::Test) = _ptrlen_to_string(L.sie_test_name, t.handle)
-nchannels(t::Test) = Int(L.sie_test_num_channels(t.handle))
-
-function channel(t::Test, i::Integer)
-    1 <= i <= nchannels(t) || throw(BoundsError(t, i))
+function _channel(t::Test, i::Integer)
+    1 <= i <= _nchannels(t) || throw(BoundsError(t, i))
     h = L.sie_test_channel(t.handle, i - 1)
     h == C_NULL ? throw(BoundsError(t, i)) : Channel(h, t.parent)
 end
 
-channels(t::Test) = [channel(t, i) for i in 1:nchannels(t)]
+_channels(t::Test) = [_channel(t, i) for i in 1:_nchannels(t)]
 
-tags(t::Test) = Tags(t, Int(L.sie_test_num_tags(t.handle)),
-    L.sie_test_tag, L.sie_test_find_tag)
+function Base.getproperty(t::Test, sym::Symbol)
+    sym === :id       && return _id(t)
+    sym === :channels && return _channels(t)
+    sym === :tags     && return _tags(t)
+    return getfield(t, sym)
+end
+Base.propertynames(::Test, private::Bool = false) =
+    private ? (:id, :channels, :tags, :handle, :parent) :
+              (:id, :channels, :tags)
 
 Base.show(io::IO, t::Test) =
-    print(io, "Test(id=", id(t), ", name=", repr(name(t)),
-              ", nchannels=", nchannels(t), ")")
+    print(io, "Test(id=", _id(t),
+              ", nchannels=", _nchannels(t), ")")
 
 # ── SieFile ─────────────────────────────────────────────────────────────────
 
 """
-    SieFile(path)
-    open(SieFile, path)
-    open(f, SieFile, path)
+    SieFile
 
-Open a SIE file by path. The handle is closed via [`close`](@ref) (also via a
-finalizer if it is forgotten). The do-block form is the recommended pattern:
+An opened SIE file handle. Open one with [`opensie`](@ref) using the
+do-block form so the underlying libsie handle is released automatically:
 
-    open(SomatSIE.SieFile, "myfile.sie") do f
-        for ch in channels(f)
-            println(name(ch), ": ", read(f, ch))
+    opensie("myfile.sie") do f
+        for t in f.tests, ch in t.channels
+            for dim in ch.dims
+                println(ch.name, " dim ", dim.id, ": ", collect(dim))
+            end
         end
     end
 """
 mutable struct SieFile
     handle::Ptr{Cvoid}
     path::String
+    # Per-channel cache of decoded blocks + a persistent spigot. Populated
+    # lazily on first vector-like access of a `Dimension`. Keyed by the
+    # libsie channel handle (stable for the file's lifetime). Type-erased
+    # to `Any` because `ChannelCache` is defined further down in this file.
+    caches::Dict{Ptr{Cvoid}, Any}
 
     function SieFile(path::AbstractString)
         out = Ref{Ptr{Cvoid}}(C_NULL)
         _check(L.sie_file_open(String(path), out))
-        sf = new(out[], String(path))
+        sf = new(out[], String(path), Dict{Ptr{Cvoid}, Any}())
         finalizer(_finalize_file, sf)
         return sf
     end
@@ -289,8 +382,24 @@ end
 
 handle(sf::SieFile) = sf.handle
 
+# Close every cached spigot for `sf` and forget them. Must run BEFORE the
+# underlying file handle is freed, because spigots are owned by the file.
+function _close_caches!(sf::SieFile)
+    isempty(sf.caches) && return nothing
+    for (_, cache) in sf.caches
+        try
+            close(cache.spigot)
+        catch
+            # Best-effort: don't let a single bad spigot block cleanup.
+        end
+    end
+    empty!(sf.caches)
+    return nothing
+end
+
 function _finalize_file(sf::SieFile)
     if sf.handle != C_NULL
+        _close_caches!(sf)
         L.sie_file_close(sf.handle)
         sf.handle = C_NULL
     end
@@ -304,6 +413,7 @@ borrowed `Test`/`Channel`/`Tag`/`Dimension` references become invalid.
 """
 function Base.close(sf::SieFile)
     if sf.handle != C_NULL
+        _close_caches!(sf)
         L.sie_file_close(sf.handle)
         sf.handle = C_NULL
     end
@@ -312,9 +422,24 @@ end
 
 Base.isopen(sf::SieFile) = sf.handle != C_NULL
 
-Base.open(::Type{SieFile}, path::AbstractString) = SieFile(path)
+"""
+    opensie(f::Function, path)
 
-function Base.open(f::Function, ::Type{SieFile}, path::AbstractString)
+Open the SIE file at `path`, pass the resulting [`SieFile`](@ref) to `f`,
+and close it (releasing the underlying libsie handle) when `f` returns
+\u2014 even if it throws. Use it with do-block syntax:
+
+```julia
+opensie("myfile.sie") do f
+    for t in f.tests, ch in t.channels
+        println(ch.name)
+    end
+end
+```
+"""
+opensie(path::AbstractString) = SieFile(path)
+
+function opensie(f::Function, path::AbstractString)
     sf = SieFile(path)
     try
         return f(sf)
@@ -328,59 +453,46 @@ function _check_open(sf::SieFile)
     return sf.handle
 end
 
-# Counts
-nchannels(sf::SieFile) = Int(L.sie_file_num_channels(_check_open(sf)))
-ntests(sf::SieFile)    = Int(L.sie_file_num_tests(_check_open(sf)))
+_ntests(sf::SieFile) = Int(L.sie_file_num_tests(_check_open(sf)))
 
-# Indexed access
-function channel(sf::SieFile, i::Integer)
+function _test(sf::SieFile, i::Integer)
     h = _check_open(sf)
-    1 <= i <= nchannels(sf) || throw(BoundsError(sf, i))
-    p = L.sie_file_channel(h, i - 1)
-    p == C_NULL ? throw(BoundsError(sf, i)) : Channel(p, sf)
-end
-
-function test(sf::SieFile, i::Integer)
-    h = _check_open(sf)
-    1 <= i <= ntests(sf) || throw(BoundsError(sf, i))
+    1 <= i <= _ntests(sf) || throw(BoundsError(sf, i))
     p = L.sie_file_test(h, i - 1)
     p == C_NULL ? throw(BoundsError(sf, i)) : Test(p, sf)
 end
 
-channels(sf::SieFile) = [channel(sf, i) for i in 1:nchannels(sf)]
-tests(sf::SieFile)    = [test(sf, i)    for i in 1:ntests(sf)]
+_tests(sf::SieFile) = [_test(sf, i) for i in 1:_ntests(sf)]
+
+_tags(sf::SieFile) = (h = _check_open(sf);
+    _build_tags(h, Int(L.sie_file_num_tags(h)), L.sie_file_tag))
 
 """
-    findchannel(file, id::Integer) -> Channel | nothing
+    findchannel(test, name::AbstractString) -> Channel | nothing
 
-Lookup a channel by its SIE-internal numeric id.
+Look up a channel within `test` by its name. Returns `nothing` if no
+channel in the test has the requested name. The match is exact
+(case-sensitive); if multiple channels share the name, the first one is
+returned.
 """
-function findchannel(sf::SieFile, cid::Integer)
-    p = L.sie_file_find_channel(_check_open(sf), cid)
-    p == C_NULL ? nothing : Channel(p, sf)
+function findchannel(t::Test, chname::AbstractString)
+    for c in t.channels
+        c.name == chname && return c
+    end
+    return nothing
 end
 
-"""
-    findtest(file, id::Integer) -> Test | nothing
-"""
-function findtest(sf::SieFile, tid::Integer)
-    p = L.sie_file_find_test(_check_open(sf), tid)
-    p == C_NULL ? nothing : Test(p, sf)
+function Base.getproperty(sf::SieFile, sym::Symbol)
+    sym === :tests && return _tests(sf)
+    sym === :tags  && return _tags(sf)
+    sym === :channels && error(
+        "`SieFile` has no `channels` property because channel ids may " *
+        "collide between tests. Iterate via `f.tests` instead, e.g. " *
+        "[ch for t in f.tests for ch in t.channels].")
+    return getfield(sf, sym)
 end
-
-"""
-    containingtest(file, channel) -> Test | nothing
-
-Return the [`Test`](@ref) that owns `channel`, or `nothing` if the channel is
-not contained in any test.
-"""
-function containingtest(sf::SieFile, ch::Channel)
-    p = L.sie_file_containing_test(_check_open(sf), ch.handle)
-    p == C_NULL ? nothing : Test(p, sf)
-end
-
-tags(sf::SieFile) = Tags(sf, Int(L.sie_file_num_tags(_check_open(sf))),
-    L.sie_file_tag, nothing)
+Base.propertynames(::SieFile, private::Bool = false) =
+    private ? (:tests, :tags, :path, :handle, :caches) : (:tests, :tags, :path)
 
 Base.show(io::IO, sf::SieFile) = print(io,
     "SieFile(", repr(sf.path), isopen(sf) ? "" : ", closed", ")")
@@ -574,9 +686,10 @@ function Base.iterate(s::Spigot, _state = nothing)
 end
 
 """
-    read(file::SieFile, dim::Dimension) -> Vector{Float64} | Vector{Vector{UInt8}}
+    _readdim(dim::Dimension) -> Vector{Float64} | Vector{Vector{UInt8}}
 
-Read the entire data series for a single dimension into a Julia vector.
+Internal: read the entire data series for a single dimension into a
+Julia vector. Backs `collect(dim)` and `dim[:]`.
 
 The element type is chosen from the dimension's column type:
 
@@ -584,113 +697,29 @@ The element type is chosen from the dimension's column type:
 * `:raw`     columns return a `Vector{Vector{UInt8}}`, one byte string per
   sample (e.g. CAN frames).
 
-This is the recommended way to pull data: it preserves raw payloads losslessly
-and makes per-dimension tags trivially reachable via `tags(dim)`.
-
-# Example
-```julia
-open(SomatSIE.SieFile, "can.sie") do f
-    for ch in channels(f)
-        for dim in dimensions(ch)
-            data  = read(f, dim)            # typed per-dim vector
-            units = get(tags(dim), "core:units", nothing)
-            @show name(ch), index(dim), eltype(data), length(data), units
-        end
-    end
-end
-```
+Walks the channel's spigot once and pulls each block via the libsie bulk
+getters (`sie_output_get_float64_range` / `sie_output_get_raw_range`), so
+each block costs a single `ccall` instead of one per sample.
 """
-function Base.read(file::SieFile, dim::Dimension)
-    ch = dim.parent::Channel
-    d  = index(dim) + 1   # libsie dimension index is 0-based; convert to 1-based
-    return spigot(file, ch) do s
-        out = next!(s)
-        out === nothing && return Float64[]   # empty channel — default to float
-        ct = coltype(out, d)
-        if ct === :float64
-            buf     = Float64[]
-            d0      = Csize_t(d - 1)
-            written = Ref{Csize_t}(0)
-            while out !== nothing
-                nr   = numrows(out)
-                if nr > 0
-                    base = length(buf)
-                    resize!(buf, base + nr)
-                    GC.@preserve buf _check(L.sie_output_get_float64_range(
-                        out.handle, d0, Csize_t(0), Csize_t(nr),
-                        pointer(buf, base + 1), written))
-                end
-                out = next!(s)
-            end
-            return buf
-        elseif ct === :raw
-            buf     = Vector{Vector{UInt8}}()
-            d0      = Csize_t(d - 1)
-            written = Ref{Csize_t}(0)
-            ptrs    = Vector{Ptr{UInt8}}()
-            sizes   = Vector{UInt32}()
-            while out !== nothing
-                nr = numrows(out)
-                if nr > 0
-                    resize!(ptrs,  nr)
-                    resize!(sizes, nr)
-                    GC.@preserve ptrs sizes _check(L.sie_output_get_raw_range(
-                        out.handle, d0, Csize_t(0), Csize_t(nr),
-                        pointer(ptrs), pointer(sizes), written))
-                    @inbounds for i in 1:nr
-                        p, n = ptrs[i], Int(sizes[i])
-                        push!(buf, (p == C_NULL || n == 0) ? UInt8[] :
-                            copy(unsafe_wrap(Array, p, n; own = false)))
-                    end
-                end
-                out = next!(s)
-            end
-            return buf
-        else
-            error("dimension $(index(dim)) of channel '", name(ch),
-                  "' has no data type (:none)")
+function _readdim(d::Dimension)
+    ch    = d.parent::Channel
+    file  = ch.parent::SieFile
+    cache = _channel_cache(file, ch)
+    cache.total_rows == 0 && return Float64[]
+    et    = eltype(d)
+    dimid = _id(d)
+    result = et === Float64 ? Vector{Float64}(undef, cache.total_rows) :
+                              Vector{Vector{UInt8}}(undef, cache.total_rows)
+    pos = 1
+    @inbounds for b in 1:cache.nblocks
+        block = _block_for(cache, dimid, b)
+        n = length(block)
+        for k in 1:n
+            result[pos + k - 1] = block[k]
         end
+        pos += n
     end
-end
-
-"""
-    read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64}) -> dest
-
-In-place variant of [`read`](@ref) for `:float64` dimensions. `dest` is
-resized to fit the channel and filled with engineering-scaled samples.
-Uses the libsie `sie_output_get_float64_range` bulk getter so each block
-costs a single `ccall` instead of one per sample.
-
-Throws on `:raw`/`:none` columns; for those use [`read`](@ref).
-"""
-function Base.read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64})
-    ch = dim.parent::Channel
-    d  = index(dim) + 1
-    spigot(file, ch) do s
-        out = next!(s)
-        if out === nothing
-            resize!(dest, 0)
-            return dest
-        end
-        ct = coltype(out, d)
-        ct === :float64 || error(
-            "read! requires a :float64 dimension; dim $(index(dim)) is :$ct")
-        d0      = Csize_t(d - 1)
-        written = Ref{Csize_t}(0)
-        resize!(dest, 0)
-        while out !== nothing
-            nr = numrows(out)
-            if nr > 0
-                base = length(dest)
-                resize!(dest, base + nr)
-                GC.@preserve dest _check(L.sie_output_get_float64_range(
-                    out.handle, d0, Csize_t(0), Csize_t(nr),
-                    pointer(dest, base + 1), written))
-            end
-            out = next!(s)
-        end
-        return dest
-    end
+    return result
 end
 
 """
@@ -703,20 +732,167 @@ block rather than per sample, so cheap even for multi-million-row channels.
 Useful when constructing a time axis for a sequential time-history channel
 directly from `core:sample_rate` instead of reading dim-0.
 """
-function numrows(file::SieFile, ch::Channel)
-    n = 0
-    spigot(file, ch) do s
-        out = next!(s)
-        while out !== nothing
-            n += numrows(out)
-            out = next!(s)
-        end
-    end
-    return n
-end
+numrows(file::SieFile, ch::Channel) = _channel_cache(file, ch).total_rows
 
 Base.show(io::IO, s::Spigot) = print(io,
-    "Spigot(channel=", id(s.channel), isopen(s) ? "" : ", closed", ")")
+    "Spigot(channel=", _id(s.channel), isopen(s) ? "" : ", closed", ")")
+
+# ── ChannelCache (per-channel decoded-block LRU + persistent spigot) ────────
+#
+# Vector-like access on a `Dimension` (`length`, `eltype`, `dim[i]`, `dim[a:b]`,
+# `collect(dim)`) goes through a per-`Channel` cache:
+#
+#   * one persistent `Spigot` is opened on first access and reused for every
+#     subsequent block fetch (no repeated `sie_spigot_new`/free churn);
+#   * a small LRU of decoded blocks keyed by `(block_idx, dim_id)` memoizes
+#     the bulk-getter results, so repeated reads near the same row pay no
+#     further ccalls;
+#   * a precomputed `offsets` vector (cumulative row counts) lets index/range
+#     reads jump straight to the containing block via `searchsortedlast`.
+#
+# All caches for a file are stored in `SieFile.caches` and are freed by
+# `_close_caches!` BEFORE `sie_file_close`, since spigots are owned by the
+# file. The cache is purely additive — libsie 0.3 is read-only, so blocks
+# never need to be invalidated.
+
+const _BLOCK_LRU_DEFAULT = 64
+
+mutable struct ChannelCache
+    spigot::Spigot
+    offsets::Vector{Int}      # cumulative row counts; len = nblocks + 1
+    total_rows::Int
+    nblocks::Int
+    next_block::Int           # 1-based: index that next!(spigot) will yield
+    eltype_cache::Dict{Int, DataType}              # dim_id => Float64 | Vector{UInt8}
+    lru::Dict{Tuple{Int,Int}, Any}                 # (block_idx, dim_id) => Vector
+    lru_order::Vector{Tuple{Int,Int}}              # oldest first; touch-on-read
+    lru_max::Int
+end
+
+function ChannelCache(file::SieFile, ch::Channel;
+                      lru_max::Integer = _BLOCK_LRU_DEFAULT)
+    s = Spigot(file, ch)
+    offsets = Int[0]
+    nb = 0
+    out = next!(s)
+    while out !== nothing
+        nb += 1
+        push!(offsets, offsets[end] + numrows(out))
+        out = next!(s)
+    end
+    reset!(s)
+    return ChannelCache(s, offsets, offsets[end], nb, 1,
+        Dict{Int, DataType}(),
+        Dict{Tuple{Int,Int}, Any}(),
+        Tuple{Int,Int}[],
+        Int(lru_max))
+end
+
+# Advance the persistent spigot until `next!` has yielded block `target`,
+# returning that `Output`. The Output is only valid until the next `next!`,
+# so callers must decode immediately (see `_decode_block`).
+function _advance_to(cache::ChannelCache, target::Int)
+    if target < cache.next_block
+        reset!(cache.spigot)
+        cache.next_block = 1
+    end
+    out = nothing
+    while cache.next_block <= target
+        out = next!(cache.spigot)
+        out === nothing && error("unexpected end of spigot at block $target")
+        cache.next_block += 1
+    end
+    return out
+end
+
+# Decode a whole block for one dimension into a typed Julia vector.
+function _decode_block(out::Output, dimid::Int, nr::Int, ct::Symbol)
+    d0      = Csize_t(dimid - 1)
+    written = Ref{Csize_t}(0)
+    if ct === :float64
+        buf = Vector{Float64}(undef, nr)
+        if nr > 0
+            GC.@preserve buf _check(L.sie_output_get_float64_range(
+                out.handle, d0, Csize_t(0), Csize_t(nr),
+                pointer(buf), written))
+        end
+        return buf
+    elseif ct === :raw
+        buf = Vector{Vector{UInt8}}(undef, nr)
+        if nr > 0
+            ptrs  = Vector{Ptr{UInt8}}(undef, nr)
+            sizes = Vector{UInt32}(undef, nr)
+            GC.@preserve ptrs sizes _check(L.sie_output_get_raw_range(
+                out.handle, d0, Csize_t(0), Csize_t(nr),
+                pointer(ptrs), pointer(sizes), written))
+            @inbounds for i in 1:nr
+                p, n = ptrs[i], Int(sizes[i])
+                buf[i] = (p == C_NULL || n == 0) ? UInt8[] :
+                    copy(unsafe_wrap(Array, p, n; own = false))
+            end
+        end
+        return buf
+    else
+        error("dimension $dimid has no data type (:none)")
+    end
+end
+
+# Touch an existing LRU entry: move the key to the most-recently-used end
+# and return the cached vector.
+function _touch_lru!(cache::ChannelCache, key::Tuple{Int,Int})
+    idx = findfirst(==(key), cache.lru_order)
+    idx !== nothing && deleteat!(cache.lru_order, idx)
+    push!(cache.lru_order, key)
+    return cache.lru[key]
+end
+
+# Insert a freshly decoded block, evicting the oldest entries if needed.
+function _store_lru!(cache::ChannelCache, key::Tuple{Int,Int}, data)
+    cache.lru[key] = data
+    push!(cache.lru_order, key)
+    while length(cache.lru_order) > cache.lru_max
+        old = popfirst!(cache.lru_order)
+        delete!(cache.lru, old)
+    end
+    return data
+end
+
+# Locate (block_idx, row_in_block) — both for a 0-based row index that is
+# known to be in range. Uses binary search on the small `offsets` vector.
+function _locate_row(cache::ChannelCache, target0::Int)
+    block_idx = searchsortedlast(cache.offsets, target0)
+    return block_idx, target0 - cache.offsets[block_idx]
+end
+
+# Fetch decoded data for `(block_idx, dimid)`, decoding via the persistent
+# spigot on miss and memoizing in the LRU.
+function _block_for(cache::ChannelCache, dimid::Int, block_idx::Int)
+    key = (block_idx, dimid)
+    haskey(cache.lru, key) && return _touch_lru!(cache, key)
+    out = _advance_to(cache, block_idx)
+    nr  = numrows(out)
+    ct  = coltype(out, dimid)
+    if !haskey(cache.eltype_cache, dimid)
+        cache.eltype_cache[dimid] =
+            ct === :float64 ? Float64           :
+            ct === :raw     ? Vector{UInt8}     :
+            error("dimension $dimid has no data type (:none)")
+    end
+    data = _decode_block(out, dimid, nr, ct)
+    return _store_lru!(cache, key, data)
+end
+
+# Lazily build/lookup the cache for a channel. Refuses on a closed file.
+function _channel_cache(sf::SieFile, ch::Channel)
+    _check_open(sf)
+    h = ch.handle
+    cache = get(sf.caches, h, nothing)
+    if cache === nothing
+        cache = ChannelCache(sf, ch)
+        sf.caches[h] = cache
+    end
+    return cache::ChannelCache
+end
 
 # ── Stream (incremental ingest) ─────────────────────────────────────────────
 

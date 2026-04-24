@@ -69,8 +69,6 @@ sie_file_containing_test(h, ch) =
 
 # ── Test ────────────────────────────────────────────────────────────────────
 sie_test_id(h) = ccall((:sie_test_id, libsie), UInt32, (Ptr{Cvoid},), h)
-sie_test_name(h, ptr, len) =
-    ccall((:sie_test_name, libsie), Cvoid, (Ptr{Cvoid}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}), h, ptr, len)
 sie_test_num_channels(h) = ccall((:sie_test_num_channels, libsie), Csize_t, (Ptr{Cvoid},), h)
 sie_test_channel(h, i) =
     ccall((:sie_test_channel, libsie), Ptr{Cvoid}, (Ptr{Cvoid}, Csize_t), h, Csize_t(i))
@@ -96,8 +94,6 @@ sie_channel_find_tag(h, key) =
 
 # ── Dimension ───────────────────────────────────────────────────────────────
 sie_dimension_index(h) = ccall((:sie_dimension_index, libsie), UInt32, (Ptr{Cvoid},), h)
-sie_dimension_name(h, ptr, len) =
-    ccall((:sie_dimension_name, libsie), Cvoid, (Ptr{Cvoid}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}), h, ptr, len)
 sie_dimension_num_tags(h) = ccall((:sie_dimension_num_tags, libsie), Csize_t, (Ptr{Cvoid},), h)
 sie_dimension_tag(h, i) =
     ccall((:sie_dimension_tag, libsie), Ptr{Cvoid}, (Ptr{Cvoid}, Csize_t), h, Csize_t(i))

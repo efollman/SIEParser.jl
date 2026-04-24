@@ -1,11 +1,11 @@
 using Test
 using SomatSIE
-using SomatSIE: SieFile, Spigot, Stream, Tag, Tags, Output, libsie_version,
-                spigot, channels, tests, tags, dimensions, dimension,
-                channel, test, findchannel, findtest, containingtest,
+using SomatSIE: SieFile, Spigot, Stream, Tags, Output,
+                opensie, findchannel,
+                spigot,
                 next!, numrows, numdims, numblocks, block, coltype,
-                getfloat64, isstring, isbinary, value, key, valuesize,
-                id, testid, name, index, nchannels, ntests, reset!,
+                getfloat64,
+                reset!,
                 add!, numgroups
 
 # Helpers
@@ -21,18 +21,11 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
 
 @testset "SomatSIE.jl" begin
 
-    @testset "library info" begin
-        v = libsie_version()
-        @test v isa AbstractString
-        @test !isempty(v)
-    end
-
     @testset "open/close" begin
         @test isfile(FILE_MIN)
         f = SieFile(FILE_MIN)
         @test isopen(f)
-        @test nchannels(f) >= 1
-        @test ntests(f)    >= 1
+        @test length(f.tests) >= 1
         close(f)
         @test !isopen(f)
         # idempotent
@@ -40,11 +33,10 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
     end
 
     @testset "do-block open" begin
-        result = open(SieFile, FILE_MIN) do f
-            (nchannels(f), ntests(f))
+        result = opensie(FILE_MIN) do f
+            length(f.tests)
         end
-        @test result[1] >= 1
-        @test result[2] >= 1
+        @test result >= 1
     end
 
     @testset "missing file -> SieError" begin
@@ -52,54 +44,71 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
     end
 
     @testset "tests / channels / dims" begin
-        open(SieFile, FILE_MIN) do f
-            ts = tests(f)
+        opensie(FILE_MIN) do f
+            ts = f.tests
             @test !isempty(ts)
             for t in ts
-                @test id(t) isa Integer
-                @test name(t) isa AbstractString
-                for c in channels(t)
+                @test t.id isa Integer
+                @test t.id >= 1
+                for c in t.channels
                     @test c isa SomatSIE.Channel
-                    @test id(c) isa Integer
-                    @test testid(c) == id(t)
-                    @test numdims(c) >= 1
-                    for d in dimensions(c)
-                        @test index(d) isa Integer
+                    @test c.id isa Integer
+                    @test c.id >= 1
+                    @test length(c.dims) >= 1
+                    for d in c.dims
+                        @test d.id isa Integer
+                        @test d.id >= 1
                     end
                     # round-trip lookup
-                    @test findchannel(f, id(c)) !== nothing
-                    @test containingtest(f, c) !== nothing
-                    @test id(containingtest(f, c)) == id(t)
+                    @test findchannel(t, c.name) !== nothing
                 end
-                @test findtest(f, id(t)) !== nothing
             end
         end
     end
 
+    @testset "dot-property accessors" begin
+        opensie(FILE_MIN) do f
+            t = first(f.tests)
+            @test t.id isa Integer
+            @test t.channels isa Vector
+            @test t.tags isa Tags
+            c = first(t.channels)
+            @test c.id isa Integer
+            @test c.name isa AbstractString
+            @test c.dims isa Vector
+            @test c.tags isa Tags
+            d = first(c.dims)
+            @test d.id isa Integer
+            @test d.tags isa Tags
+            # propertynames advertises the dot-public surface
+            @test :tests in propertynames(f)
+            @test :id    in propertynames(t)
+            @test :dims  in propertynames(c)
+            # SieFile has no `channels` property — must go through tests
+            @test_throws ErrorException f.channels
+        end
+    end
+
     @testset "tags (file/test/channel/dimension)" begin
-        open(SieFile, FILE_MIN) do f
-            ftags = tags(f)
+        opensie(FILE_MIN) do f
+            ftags = f.tags
+            @test ftags isa Tags
+            @test ftags isa AbstractDict
             @test length(ftags) >= 0
-            for tag in ftags
-                @test key(tag) isa AbstractString
-                @test isstring(tag) || isbinary(tag)
-                if isstring(tag)
-                    @test value(tag) isa AbstractString
-                else
-                    @test value(tag) isa Vector{UInt8}
-                end
-                @test valuesize(tag) == ncodeunits_or_size(value(tag))
+            for (k, v) in ftags
+                @test k isa AbstractString
+                @test v isa AbstractString || v isa Vector{UInt8}
             end
 
-            for t in tests(f)
-                ttags = tags(t)
+            for t in f.tests
+                ttags = t.tags
                 @test get(ttags, "definitely-not-a-tag-key", nothing) === nothing
                 @test !haskey(ttags, "definitely-not-a-tag-key")
-                for c in channels(t)
-                    ct = tags(c)
+                for c in t.channels
+                    ct = c.tags
                     @test length(ct) >= 0
-                    for d in dimensions(c)
-                        dt = tags(d)
+                    for d in c.dims
+                        dt = d.tags
                         @test length(dt) >= 0
                     end
                 end
@@ -107,9 +116,9 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
         end
     end
 
-    @testset "spigot iteration & read(file, dim)" begin
-        open(SieFile, FILE_MIN) do f
-            ch = first(channels(f))
+    @testset "spigot iteration & collect(dim)" begin
+        opensie(FILE_MIN) do f
+            ch = first(first(f.tests).channels)
             # Iterate the spigot directly
             spigot(f, ch) do s
                 @test numblocks(s) >= 0
@@ -117,13 +126,13 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                 for out in s
                     @test out isa Output
                     @test numrows(out) >= 0
-                    @test numdims(out) == numdims(ch)
+                    @test numdims(out) == length(ch.dims)
                     total += numrows(out)
                 end
             end
             # Materialize each dimension separately
-            for dim in dimensions(ch)
-                v = read(f, dim)
+            for dim in ch.dims
+                v = collect(dim)
                 @test v isa AbstractVector
                 # Float64 column → Vector{Float64}; raw → Vector{Vector{UInt8}}
                 @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
@@ -132,9 +141,41 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
         end
     end
 
+    @testset "Dimension as a vector (indexing / collect)" begin
+        opensie(FILE_MIN) do f
+            ch = first(first(f.tests).channels)
+            for dim in ch.dims
+                full = collect(dim)
+                n    = length(full)
+                @test length(dim) == n
+                @test size(dim)   == (n,)
+                @test eltype(dim) === eltype(full)
+                # dim[:] equals collect(dim)
+                @test dim[:]       == full
+                if n > 0
+                    @test dim[1]      == full[1]
+                    @test dim[end]    == full[end]
+                    @test firstindex(dim) == 1
+                    @test lastindex(dim)  == n
+                    mid = (n + 1) ÷ 2
+                    @test dim[mid] == full[mid]
+                    # range read
+                    lo = mid
+                    hi = min(n, mid + 3)
+                    @test dim[lo:hi] == full[lo:hi]
+                    # iteration matches collect
+                    @test [x for x in dim] == full
+                end
+                # bounds
+                @test_throws BoundsError dim[0]
+                @test_throws BoundsError dim[n + 1]
+            end
+        end
+    end
+
     @testset "spigot reset / position" begin
-        open(SieFile, FILE_MIN) do f
-            ch = first(channels(f))
+        opensie(FILE_MIN) do f
+            ch = first(first(f.tests).channels)
             s = spigot(f, ch)
             try
                 first_block = next!(s)
@@ -154,11 +195,12 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
 
     @testset "comprehensive VBM file" begin
         if isfile(FILE_VBM)
-            open(SieFile, FILE_VBM) do f
-                @test nchannels(f) > 1
+            opensie(FILE_VBM) do f
+                allchans = [c for t in f.tests for c in t.channels]
+                @test length(allchans) > 1
                 # Read a handful of channels' first dimension and assert it works
-                for c in first(channels(f), min(3, nchannels(f)))
-                    v = read(f, first(dimensions(c)))
+                for c in first(allchans, min(3, length(allchans)))
+                    v = collect(first(c.dims))
                     @test v isa AbstractVector
                     @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
                 end

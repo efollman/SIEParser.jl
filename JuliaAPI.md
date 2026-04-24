@@ -4,42 +4,36 @@
 [libsie-z](https://github.com/efollman/libsie-z) (provided by `libsie_jll`)
 for reading HBM/Somat eDAQ SIE acquisition files.
 
-The API is organized around four types — [`SieFile`](#siefile),
-[`Spigot`](#spigot), [`Stream`](#stream), and [`Histogram`](#histogram) —
-plus value/metadata types (`Test`, `Channel`, `Dimension`, `Tag`, `Tags`,
-`Output`) and the `SieError` exception.
+The public API is intentionally small and is organized around a single
+top-level type — [`SieFile`](#siefile) — plus value/metadata types
+(`Test`, `Channel`, `Dimension`, `Tags`) and the `SieError` exception.
+Files are opened with [`opensie`](#siefile); per-dimension data is
+materialized via `collect(dim)` (or `dim[:]`).
 
 > The libsie 0.3 ABI is **read-only**: there is no SIE writer.
+
+> Spigot / streaming / histogram functionality is implemented but kept
+> internal. It is reachable as `SomatSIE.spigot`, `SomatSIE.Stream`,
+> `SomatSIE.Histogram`, etc., for advanced use, but is not part of the
+> stable exported surface.
+
+> Public accessors on `SieFile`, `Test`, `Channel`, and `Dimension` are
+> exposed as **dot properties** \u2014 `f.tests`, `t.channels`,
+> `ch.dims`, `dim.id`, `ch.name`, `x.tags`, etc. There are no
+> matching exported functions; use the property syntax everywhere.
 
 ---
 
 ## Table of Contents
 
-- [Library info](#library-info)
 - [Errors](#errors)
 - [`SieFile`](#siefile)
 - [`Test`](#test)
 - [`Channel`](#channel)
 - [`Dimension`](#dimension)
-- [`Tag` and `Tags`](#tag-and-tags)
-- [`Spigot` and `Output`](#spigot-and-output)
+- [`Tags`](#tags)
 - [Reading data](#reading-data)
-- [`Stream` (incremental ingest)](#stream-incremental-ingest)
-- [`Histogram`](#histogram)
 - [Quick reference: exported names](#quick-reference-exported-names)
-
----
-
-## Library info
-
-### `libsie_version() -> String`
-
-Return the version string of the underlying libsie shared library.
-
-```julia
-julia> SomatSIE.libsie_version()
-"0.3.x"
-```
 
 ---
 
@@ -62,25 +56,21 @@ Fields:
 
 ## `SieFile`
 
-The opened-file handle. Mutable; closed via `close` or its finalizer.
+The opened-file handle. Mutable; closed automatically by the do-block
+form of [`opensie`](#opening-a-file-opensie) (or its finalizer).
 
-### Constructors / `open`
-
-```julia
-SieFile(path)                         # open and return a SieFile
-open(SomatSIE.SieFile, path)          # idiomatic alias
-open(f, SomatSIE.SieFile, path)       # do-block form (recommended)
-```
-
-The do-block form guarantees `close` runs even on exceptions:
+### Opening a file: `opensie`
 
 ```julia
-open(SomatSIE.SieFile, "myfile.sie") do f
-    for ch in channels(f)
-        @show name(ch)
+opensie("myfile.sie") do f
+    for t in f.tests, ch in t.channels
+        @show ch.name
     end
 end
 ```
+
+The do-block form guarantees `close` runs even on exceptions \u2014 use it
+for all file access.
 
 ### `close(file::SieFile)`
 
@@ -92,49 +82,16 @@ the file become invalid.
 
 `true` while the underlying libsie handle is live.
 
-### `nchannels(file::SieFile) -> Int`
+### `file.tests -> Vector{Test}`
 
-Total number of channels across all tests in the file.
+All tests in the file, materialized into a `Vector`. Use `length` to get
+a count. Channels live under tests — there is no `file.channels`
+because channel ids may collide between tests; iterate via
+`[ch for t in f.tests for ch in t.channels]`.
 
-### `ntests(file::SieFile) -> Int`
+### `file.tags -> Tags`
 
-Total number of tests recorded in the file.
-
-### `channel(file::SieFile, i::Integer) -> Channel`
-
-1-based positional access into the file's channel list. Throws
-`BoundsError` for out-of-range `i`.
-
-### `test(file::SieFile, i::Integer) -> Test`
-
-1-based positional access into the file's test list. Throws `BoundsError`
-for out-of-range `i`.
-
-### `channels(file::SieFile) -> Vector{Channel}`
-
-Materialize all channels into a Julia `Vector`.
-
-### `tests(file::SieFile) -> Vector{Test}`
-
-Materialize all tests into a Julia `Vector`.
-
-### `findchannel(file::SieFile, id::Integer) -> Union{Channel, Nothing}`
-
-Look up a channel by its SIE-internal numeric id. Returns `nothing` if no
-matching channel exists.
-
-### `findtest(file::SieFile, id::Integer) -> Union{Test, Nothing}`
-
-Look up a test by its SIE-internal numeric id.
-
-### `containingtest(file::SieFile, ch::Channel) -> Union{Test, Nothing}`
-
-Return the [`Test`](#test) that owns `ch`, or `nothing` if the channel is
-not contained in any test.
-
-### `tags(file::SieFile) -> Tags`
-
-File-level tag collection (see [`Tags`](#tag-and-tags)).
+File-level tag dictionary (see [`Tags`](#tags)).
 
 ---
 
@@ -146,29 +103,24 @@ do not use after the file is closed.
 > Named `Test` for SIE convention. Reference as `SomatSIE.Test` to avoid
 > clashing with `Base.Test`.
 
-### `id(test::Test) -> Int`
+### `test.id -> Int`
 
-SIE-internal numeric test id.
+**1-based** test id. Note: this differs from the libsie/file 0-based
+convention — Julia code is uniformly 1-based.
 
-### `name(test::Test) -> String`
+### `test.channels -> Vector{Channel}`
 
-Human-readable test name.
+All channels owned by the test, as a `Vector`. Use `length` for a count.
 
-### `nchannels(test::Test) -> Int`
+### `findchannel(test::Test, name::AbstractString) -> Union{Channel, Nothing}`
 
-Number of channels owned by this test.
+Look up a channel within `test` by its name. Exact, case-sensitive match.
+Returns `nothing` if no channel has that name; if multiple channels
+share the name, the first one is returned.
 
-### `channel(test::Test, i::Integer) -> Channel`
+### `test.tags -> Tags`
 
-1-based positional access to a channel within the test.
-
-### `channels(test::Test) -> Vector{Channel}`
-
-Materialize all channels of the test into a `Vector`.
-
-### `tags(test::Test) -> Tags`
-
-Test-level tag collection.
+Test-level tag dictionary.
 
 ---
 
@@ -176,35 +128,26 @@ Test-level tag collection.
 
 A data series within a `SieFile`. Borrowed from the file.
 
-### `id(ch::Channel) -> Int`
+### `ch.id -> Int`
 
-SIE-internal channel id.
+**1-based** channel id (unique within its `Test`). Note: this differs
+from the libsie/file 0-based convention — Julia code is uniformly
+1-based.
 
-### `testid(ch::Channel) -> Int`
-
-Id of the owning test.
-
-### `name(ch::Channel) -> String`
+### `ch.name -> String`
 
 Channel name.
 
-### `numdims(ch::Channel) -> Int`
+### `ch.dims -> Vector{Dimension}`
 
-Number of dimensions ("columns"). For a sequential time-history channel
-this is typically 2 (`0` = time, `1` = value); CAN channels can have
-mixed numeric + raw dimensions.
+All dimensions ("columns") of the channel, as a `Vector`. Use `length`
+for a count. For a sequential time-history channel this is typically
+length 2 (`dim.id == 1` is time, `dim.id == 2` is value); CAN channels
+can have mixed numeric + raw dimensions.
 
-### `dimension(ch::Channel, i::Integer) -> Dimension`
+### `ch.tags -> Tags`
 
-1-based positional access to a dimension.
-
-### `dimensions(ch::Channel) -> Vector{Dimension}`
-
-All dimensions, materialized into a `Vector`.
-
-### `tags(ch::Channel) -> Tags`
-
-Channel-level tag collection.
+Channel-level tag dictionary.
 
 ---
 
@@ -212,159 +155,71 @@ Channel-level tag collection.
 
 A single axis ("column") of a `Channel`. Borrowed from the channel.
 
-### `index(dim::Dimension) -> Int`
+### `dim.id -> Int`
 
-**Zero-based** dimension index, exactly as libsie reports it. (0 is
-typically time, 1 is value for sequential time-series channels.) Note
-that this is *not* converted to 1-based — keep the convention in mind.
+**1-based** dimension identifier (1 is typically time, 2 is value for
+sequential time-series channels). Note: this differs from the libsie/file
+0-based convention — Julia code is uniformly 1-based.
 
-### `name(dim::Dimension) -> String`
+### `dim.tags -> Tags`
 
-Dimension name.
-
-### `tags(dim::Dimension) -> Tags`
-
-Per-dimension tag collection. Useful for `core:units`, `core:sample_rate`,
+Per-dimension tag dictionary. Useful for `core:units`, `core:sample_rate`,
 etc.
 
 ---
 
-## `Tag` and `Tags`
+## `Tags`
 
-### `Tag`
+`Tags` is a type alias for `Dict{String, Union{String, Vector{UInt8}}}`.
+Reading `x.tags` on a `SieFile`, `Test`, `Channel`, or `Dimension`
+returns one of these dictionaries, fully materialized from the libsie
+tag list.
 
-A single key/value metadata entry attached to a `SieFile`, `Test`,
-`Channel`, or `Dimension`. Borrowed from its parent — no cleanup required.
+Values are `String` for textual tags or `Vector{UInt8}` for binary blobs
+— dispatch on the result type when needed.
 
-| Function                       | Returns                                | Description                                                     |
-|--------------------------------|----------------------------------------|-----------------------------------------------------------------|
-| `key(t::Tag)`                  | `String`                               | The tag key.                                                    |
-| `isstring(t::Tag)`             | `Bool`                                 | `true` if the value is textual.                                 |
-| `isbinary(t::Tag)`             | `Bool`                                 | `true` if the value is a binary blob.                           |
-| `valuesize(t::Tag)`            | `Int`                                  | Size in bytes of the value payload.                             |
-| `value(t::Tag)`                | `String` or `Vector{UInt8}`            | `String` for textual tags, copy of the bytes for binary tags.   |
-| `group(t::Tag)`                | `Int`                                  | Group ordinal that owns this tag.                               |
-| `isfromgroup(t::Tag)`          | `Bool`                                 | `true` if the tag was inherited from a group rather than direct.|
-
-### `Tags`
-
-A lazy, dict-like view of the tag list owned by a parent (`SieFile`,
-`Test`, `Channel`, or `Dimension`). Supports both positional and keyed
-access:
+Use the standard `Dict` API:
 
 | Operation                     | Result                                                    |
 |-------------------------------|-----------------------------------------------------------|
 | `length(tags)`                | Number of tags.                                           |
-| `iterate(tags)`               | Yields `Tag` values in libsie order.                      |
-| `tags[i::Integer]`            | 1-based positional access — returns `Tag`.                |
-| `tags[k::AbstractString]`     | Keyed access — returns `Tag` or throws `KeyError`.        |
+| `iterate(tags)`               | Yields `key => value` pairs.                              |
+| `tags[k::AbstractString]`     | Keyed access — returns the value or throws `KeyError`.    |
 | `get(tags, k, default)`       | Keyed access with a fallback value.                       |
 | `haskey(tags, k)`             | Membership test by key.                                   |
+| `keys(tags)` / `values(tags)` | Standard `Dict` views.                                    |
 
 ```julia
-ts = tags(ch)
+ts = ch.tags
 sr = get(ts, "core:sample_rate", nothing)
-units = haskey(ts, "core:units") ? value(ts["core:units"]) : ""
+units = haskey(ts, "core:units") ? ts["core:units"] : ""
 ```
-
----
-
-## `Spigot` and `Output`
-
-### `Spigot`
-
-A per-channel data pipeline. Mutable; close with `close` or via the
-do-block form of [`spigot`](#spigotfile-channel---spigot).
-
-### `Spigot(file, ch)` / `spigot(file, ch) -> Spigot`
-
-Attach a new spigot reading `ch` from `file`.
-
-### `spigot(f::Function, file, ch)`
-
-Do-block form. Always closes the spigot:
-
-```julia
-spigot(f, ch) do s
-    for out in s
-        # use out
-    end
-end
-```
-
-### `close(s::Spigot)` / `isopen(s::Spigot) -> Bool`
-
-Release / inspect the spigot handle. Idempotent.
-
-### `next!(s::Spigot) -> Union{Output, Nothing}`
-
-Pull the next data block. Returns `nothing` at end-of-stream. Each call
-**invalidates** the previously returned `Output`.
-
-### Iteration
-
-`Spigot` iterates yielding `Output` blocks. Iterator size is
-`Base.SizeUnknown()`, element type is `Output`.
-
-```julia
-for out in s
-    # process out — invalidated on the next iteration
-end
-```
-
-### `numblocks(s::Spigot) -> Int`
-
-Total number of blocks the spigot will (or did) emit.
-
-### `reset!(s::Spigot) -> Spigot`
-
-Rewind the spigot to its first block.
-
-### `disable_transforms!(s::Spigot, disable::Bool = true) -> Spigot`
-
-Disable (or re-enable) engineering-unit transforms — useful when raw
-counts are wanted.
-
-### `set_scan_limit!(s::Spigot, limit::Integer) -> Spigot`
-
-Bound the maximum number of scans the spigot will read per block.
-
-### Other `Spigot` methods
-
-* `position(s::Spigot) -> Int` — current byte position.
-* `seek(s::Spigot, target) -> Spigot` — seek to a byte offset.
-
-> `position` and `seek` are not exported; access via `Base.position` /
-> `Base.seek`.
-
-### `Output`
-
-A single decoded data block produced by a `Spigot`. **Owned by the
-spigot — invalidated by the next `read` / `iterate` on that spigot.**
-
-| Function                        | Returns         | Description                                                |
-|---------------------------------|-----------------|------------------------------------------------------------|
-| `numrows(out::Output)`          | `Int`           | Number of scan rows in the block.                          |
-| `numdims(out::Output)`          | `Int`           | Number of dimensions in the block.                         |
-| `block(out::Output)`            | `Int`           | Block index within the channel.                            |
-| `coltype(out, dim)`             | `Symbol`        | `:float64`, `:raw`, or `:none` for the 1-based dimension.  |
-| `getfloat64(out, dim, row)`     | `Float64`       | Float sample at 1-based `(dim, row)`. Throws on `:raw`.    |
-| `getraw(out, dim, row)`         | `Vector{UInt8}` | Copy of the raw payload at 1-based `(dim, row)`.           |
-| `Matrix(out::Output)`           | `Matrix{Float64}` | Convert all `:float64` columns to a `(numrows, numdims)` matrix. Throws if any dimension is `:raw`. |
-| `size(out::Output)`             | `Tuple`         | `(numrows, numdims)`.                                      |
-
-For mixed-type outputs (e.g. CAN channels with a raw frame dimension),
-**iterate the spigot per-block** and call `getfloat64` / `getraw` per
-dimension — do not use `Matrix(out)`.
 
 ---
 
 ## Reading data
 
-### `read(file::SieFile, dim::Dimension) -> Vector`
+A `Dimension` behaves like a 1-D collection of samples. Use the standard
+indexing / iteration idioms:
 
-Read the entire data series for a single dimension into a Julia vector.
-The element type is chosen from the dimension's column type:
+| Idiom                       | What it returns                                   | What gets read                       |
+|-----------------------------|---------------------------------------------------|--------------------------------------|
+| `length(dim)` / `size(dim)` | sample count                                      | one spigot walk (no per-sample I/O)  |
+| `eltype(dim)`               | `Float64` or `Vector{UInt8}`                      | first block only                     |
+| `dim[i]`                    | one sample                                        | only the block containing row `i`    |
+| `dim[a:b]`                  | sub-range vector                                  | only the blocks overlapping `a:b`    |
+| `collect(dim)` / `dim[:]`   | full vector (`Float64` or `Vector{UInt8}`)        | every block, one bulk ccall each     |
+| `for x in dim ... end`      | iterates samples                                  | materializes once via `collect`      |
+
+`Dimension` is intentionally **not** a subtype of `AbstractVector` (the
+element type is data-dependent), but the methods above cover the common
+vector idioms.
+
+### `collect(dim::Dimension) -> Vector`
+
+Materialize the entire data series for a single dimension into a Julia
+vector. Equivalent to `dim[:]`. The element type is chosen from the
+dimension's column type:
 
 * `:float64` columns return a `Vector{Float64}` of engineering-scaled
   samples.
@@ -372,111 +227,27 @@ The element type is chosen from the dimension's column type:
   sample (e.g. CAN frames).
 * `:none` raises an error.
 
-This is the recommended way to pull data: it preserves raw payloads
-losslessly and makes per-dimension tags trivially reachable via
-`tags(dim)`.
+The `Dimension` recovers the owning `SieFile` itself, so you never need
+to thread the file handle through the call.
+
+Internally walks the channel's spigot once and pulls each block via the
+libsie bulk getters (`sie_output_get_float64_range` /
+`sie_output_get_raw_range`) — one `ccall` per block, not per sample —
+so it is cheap even for multi-million-row channels. `dim[a:b]` uses the
+same bulk getters but only on the overlapping blocks.
 
 ```julia
-open(SomatSIE.SieFile, "can.sie") do f
-    for ch in channels(f)
-        for dim in dimensions(ch)
-            data  = read(f, dim)
-            units = get(tags(dim), "core:units", nothing)
-            @show name(ch), index(dim), eltype(data), length(data), units
+opensie("can.sie") do f
+    for t in f.tests, ch in t.channels
+        for dim in ch.dims
+            data  = collect(dim)            # or: dim[:]
+            units = get(dim.tags, "core:units", nothing)
+            @show ch.name, dim.id, eltype(data), length(data), units
+            @show dim[1], dim[end]          # cheap — single-block reads
         end
     end
 end
 ```
-
-### `read!(file::SieFile, dim::Dimension, dest::AbstractVector{Float64}) -> dest`
-
-In-place variant of `read` for `:float64` dimensions. `dest` is resized
-to fit the channel and filled with engineering-scaled samples. Uses the
-libsie `sie_output_get_float64_range` bulk getter so each block costs a
-single `ccall` instead of one per sample.
-
-Throws on `:raw`/`:none` columns.
-
-### `numrows(file::SieFile, ch::Channel) -> Int`
-
-Total number of samples in `ch` **without materializing the data**.
-Walks the channel's spigot once, summing `numrows(out)` per block — one
-ccall per block rather than per sample, so cheap even for multi-million
-row channels.
-
-Useful when constructing a time axis for a sequential time-history
-channel directly from `core:sample_rate` instead of reading dim-0.
-
----
-
-## `Stream` (incremental ingest)
-
-Incremental SIE block parser. Useful when SIE data arrives over a network
-or is being produced in real time.
-
-### `Stream()`
-
-Create a new empty stream parser. Closed via `close` or finalizer.
-
-### `close(s::Stream)`
-
-Release the underlying handle. Idempotent.
-
-### `add!(s::Stream, bytes::AbstractVector{UInt8}) -> Int`
-
-Feed `bytes` into the stream. Returns the number of bytes **consumed**.
-Bytes not consumed should be re-presented in the next call together with
-new data.
-
-### Group inspection
-
-| Function                                  | Returns | Description                                  |
-|-------------------------------------------|---------|----------------------------------------------|
-| `numgroups(s::Stream)`                    | `Int`   | Number of groups discovered so far.          |
-| `group_numblocks(s::Stream, gid)`         | `Int`   | Number of blocks in group `gid`.             |
-| `group_numbytes(s::Stream, gid)`          | `Int`   | Total bytes in group `gid`.                  |
-| `group_isclosed(s::Stream, gid)`          | `Bool`  | `true` once the group's terminating block has been seen. |
-
-`gid` is the libsie-native (zero-based) group ordinal returned/expected
-by the C ABI — it is **not** translated to 1-based here.
-
----
-
-## `Histogram`
-
-In-memory view of a histogram-typed channel.
-
-### `Histogram(file::SieFile, ch::Channel)`
-
-Build the histogram. Closed via `close` or finalizer.
-
-### `close(h::Histogram)`
-
-Release the underlying handle. Idempotent.
-
-### `numdims(h::Histogram) -> Int`
-
-Number of histogram dimensions.
-
-### `totalsize(h::Histogram) -> Int`
-
-Total number of bins across all dimensions (i.e. the product of per-dim
-bin counts).
-
-### `numbins(h::Histogram, dim::Integer) -> Int`
-
-Number of bins along the 1-based dimension `dim`.
-
-### `getbin(h::Histogram, indices) -> Float64`
-
-Bin count at `indices`, where `indices` is a tuple/vector of 1-based bin
-indices — one per dimension. Throws if its length does not match
-`numdims(h)`.
-
-### `bounds(h::Histogram, dim::Integer) -> (lower, upper)`
-
-Returns two `Vector{Float64}` arrays of length `numbins(h, dim)` giving
-the lower and upper bin edges along dimension `dim`.
 
 ---
 
@@ -484,41 +255,30 @@ the lower and upper bin edges along dimension `dim`.
 
 Types:
 
-`SieFile`, `Spigot`, `Stream`, `Histogram`, `Tag`, `Tags`, `Output`,
-`SieError`
+`SieFile`, `Tags`, `SieError`
 
-File / test / channel navigation:
+Functions:
 
-`channels`, `tests`, `tags`, `dimensions`, `dimension`, `channel`,
-`test`, `findchannel`, `findtest`, `containingtest`
+`opensie`, `findchannel`
 
-Spigots and outputs:
+Navigation and identity are accessed as **dot properties** on the
+returned types (`f.tests`, `f.tags`, `t.id`, `t.channels`,
+`t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`, `dim.id`,
+`dim.tags`) — there are no exported `tests` / `channels` /
+`dimensions` / `tags` / `id` / `name` functions.
 
-`spigot`, `next!`, `numblocks`, `numrows`, `numdims`, `block`,
-`coltype`, `getfloat64`, `getraw`
+> Counts are obtained via `length(f.tests)`, `length(t.channels)`,
+> `length(ch.dims)`, `length(x.tags)`.
+>
+> Channels live under tests. `f.channels` raises an error because
+> channel ids may collide between tests; iterate with
+> `for t in f.tests, ch in t.channels` (or build the flat list with
+> `[ch for t in f.tests for ch in t.channels]`).
 
-Tag inspection:
+> Per-element positional access is via vector indexing, e.g.
+> `f.tests[1]`, `f.tests[1].channels[1]`, `ch.dims[1]`.
 
-`isstring`, `isbinary`, `value`, `key`, `valuesize`, `group`,
-`isfromgroup`
-
-Identity / counts:
-
-`id`, `testid`, `name`, `index`, `nchannels`, `ntests`
-
-Spigot control:
-
-`reset!`, `disable_transforms!`, `set_scan_limit!`
-
-Streams:
-
-`add!`, `numgroups`, `group_numblocks`, `group_numbytes`,
-`group_isclosed`
-
-Histograms:
-
-`numbins`, `totalsize`, `getbin`, `bounds`
-
-Library info:
-
-`libsie_version`
+> Spigot, Output, Stream, and Histogram types and functions are kept
+> internal (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`,
+> …). Prefer `collect(dim)` / `dim[i]` / `dim[a:b]` for typical use; the
+> streaming layer is reserved for future optimization work.
