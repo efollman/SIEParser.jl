@@ -45,8 +45,8 @@ spigot(file, channel) do s
     for out in s             # `out` is a `SomatSIE.Output`, valid until the next iteration
         nr = numrows(out)
         for r in 1:nr
-            t = getfloat64(out, 1, r)   # dimension 1 = time
-            v = getfloat64(out, 2, r)   # dimension 2 = data
+            t = getfloat64(out, 1, r)   # dimension 1 = time (usually)
+            v = getfloat64(out, 2, r)   # dimension 2 = data (usually)
             # ...
         end
     end
@@ -101,7 +101,7 @@ Library info: `libsie_version`.
 
 ## Limitations
 
-The C ABI exposed by `libsie_jll` (v0.3) is **read-only** — no SIE-file writer is available yet. When `libsie-z` adds a writer to its C ABI, this package will grow corresponding write support.
+The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however they are low level functions geared for appending blocks to a file stream, or removing channels from a file ect. — substantial work would have to be done to support writing a file from scratch, including writing the xml headers and decoders from scratch. Since the initial purpouse of this library is simply to be able to extract data from this arcane format, this functionality will remain unimplemented.
 
 ## Versioning
 
