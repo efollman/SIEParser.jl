@@ -1,54 +1,97 @@
 # Dimension:
 """
-    Dimension{T} <: AbstractVector{T}
+    AbstractDimension{T} <: AbstractVector{T}
+    const Dimension = AbstractDimension
 
-A single axis ("column") of a [`Channel`](@ref). Borrowed from the channel.
+A single axis ("column") of a [`Channel`](@ref). Two concrete subtypes:
 
-`Dimension` is a proper `AbstractVector` whose element type is determined
-at construction by probing the underlying channel: `Dimension{Float64}`
-for engineering-value columns, `Dimension{Vector{UInt8}}` for raw
-payload columns (e.g. CAN frames). Empty channels default to `Float64`.
+* [`LibSieDimension{T}`](@ref) — backed by a libsie handle on an open
+  [`SieFile`](@ref). Reads are routed through a per-channel block cache
+  so random/range access only decodes the necessary blocks. Element type
+  is determined by probing the channel: `Float64` for engineering-value
+  columns, `Vector{UInt8}` for raw payload columns (e.g. CAN frames).
+* [`VectorDimension{T}`](@ref) — backed by an in-memory `Vector{T}`.
+  Cheap to construct from edited or synthetic data, and lets functions
+  written for `Channel`/`Dimension` consume hand-built input.
 
-Because it is an `AbstractVector`, you can pass a `Dimension` directly to
-any interface that consumes vectors — `DataFrame(:t => dim)`, Makie
-plot recipes, etc. — without an explicit `collect`. Indexing follows
-the usual semantics:
+Both behave as proper `AbstractVector{T}`s — `dim[i]`, `dim[a:b]`,
+`collect(dim)`, iteration, and pass-through to DataFrames / Makie all
+work. Identity and metadata: `dim.id` (1-based), `dim.tags`.
 
-* `dim[i]` returns a single sample (reading only the block that contains it),
-* `dim[a:b]` returns a range (reading only the overlapping blocks),
-* `collect(dim)` (or `dim[:]`) materializes the entire data series as a
-  typed Julia vector.
+Construct an in-memory dimension via:
 
-Access identity and metadata via dot syntax: `dim.id`, `dim.tags`.
-`dim.id` is **1-based** (1 is typically time, 2 is value for sequential
-time-series channels).
+    Dimension(data::AbstractVector; id=1, tags=Tags()) -> VectorDimension
 """
-struct Dimension{T} <: AbstractVector{T}
+abstract type AbstractDimension{T} <: AbstractVector{T} end
+
+const Dimension = AbstractDimension
+
+"""
+    LibSieDimension{T} <: AbstractDimension{T}
+
+A `Dimension` backed by a libsie handle on an open [`SieFile`](@ref).
+Constructed only by the library; reads are cached per-channel.
+"""
+struct LibSieDimension{T} <: AbstractDimension{T}
     handle::Ptr{Cvoid}
-    parent::Any  # Channel — typed Any to avoid forward declaration; see ch field below
+    parent::Any  # LibSieChannel — typed Any to avoid forward declaration
 end
 
-_id(d::Dimension)   = Int(L.sie_dimension_index(d.handle)) + 1
-_tags(d::Dimension) = _build_tags(d.handle,
+"""
+    VectorDimension{T} <: AbstractDimension{T}
+
+A `Dimension` whose samples live in a regular Julia `Vector{T}`. Build
+one with `Dimension(data; id=1, tags=Tags())`. Mutable: `vd.id`,
+`vd.tags`, and `vd.data` may all be reassigned.
+"""
+mutable struct VectorDimension{T} <: AbstractDimension{T}
+    data::Vector{T}
+    id::Int
+    tags::Tags
+end
+
+# Public outer constructor — `Dimension(data; ...)` resolves through the
+# `const Dimension = AbstractDimension` alias to this method.
+function (::Type{AbstractDimension})(data::AbstractVector;
+                                     id::Integer = 1, tags::Tags = Tags())
+    v = data isa Vector ? data : collect(data)
+    T = eltype(v)
+    return VectorDimension{T}(v, Int(id), tags)
+end
+
+# Internal accessors — split per concrete type:
+_id(d::LibSieDimension)   = Int(L.sie_dimension_index(d.handle)) + 1
+_tags(d::LibSieDimension) = _build_tags(d.handle,
     Int(L.sie_dimension_num_tags(d.handle)), L.sie_dimension_tag)
 
-function Base.getproperty(d::Dimension, sym::Symbol)
+_id(d::VectorDimension)   = d.id
+_tags(d::VectorDimension) = d.tags
+
+function Base.getproperty(d::LibSieDimension, sym::Symbol)
     sym === :id   && return _id(d)
     sym === :tags && return _tags(d)
     return getfield(d, sym)
 end
-Base.propertynames(::Dimension, private::Bool = false) =
-    private ? (:id, :tags, :handle, :parent) : (:id, :tags)
+function Base.getproperty(d::VectorDimension, sym::Symbol)
+    return getfield(d, sym)   # id, tags, data are real fields
+end
+Base.propertynames(::AbstractDimension, private::Bool = false) =
+    private ? (:id, :tags) : (:id, :tags)
 
-Base.show(io::IO, d::Dimension) =
-    print(io, "Dimension{", eltype(d), "}(", _id(d), ")")
+Base.show(io::IO, d::AbstractDimension) =
+    print(io, "Dimension{", eltype(d), "}(id=", _id(d), ", n=", length(d), ")")
 
-# Vector-like access on Dimension:
+# ── VectorDimension: AbstractArray interface (delegates to backing data) ──
+Base.size(d::VectorDimension)             = size(d.data)
+Base.IndexStyle(::Type{<:VectorDimension}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(d::VectorDimension, i::Integer) = d.data[i]
+
+# ── LibSieDimension: cache-routed access ──
 #
-# `Dimension <: AbstractVector{T}`, so `firstindex`, `lastindex`, `size`,
-# `eltype`, `IndexStyle`, etc. come from Base. We only override the methods
-# below to route through the per-channel block cache instead of falling
-# back to per-element scalar reads:
+# `LibSieDimension <: AbstractVector{T}`, so `firstindex`, `lastindex`,
+# `size`, `eltype`, `IndexStyle`, etc. come from Base. We override the
+# methods below to route through the per-channel block cache instead of
+# falling back to per-element scalar reads:
 #
 #   length(dim)         total sample count (from cache)
 #   dim[i]              one sample — only the containing block is fetched
@@ -56,26 +99,27 @@ Base.show(io::IO, d::Dimension) =
 #   dim[:] / collect    full materialized vector via the cache
 #   for x in dim ...    iterates the materialized vector
 
-# Forward declarations satisfied later in this file:
-#   ChannelCache, _channel_cache, _block_for, _locate_row
+# Forward declarations satisfied later in the load order:
+#   ChannelCache, _channel_cache, _block_for, _locate_row, _readdim
 
-Base.size(d::Dimension)       = (_channel_cache(d.parent.parent::SieFile,
-                                                 d.parent::Channel).total_rows,)
+Base.size(d::LibSieDimension) =
+    (_channel_cache(d.parent.parent::SieFile,
+                    d.parent::LibSieChannel).total_rows,)
 
 # Full materialization. Walks the channel via the persistent spigot,
 # decoding each block once via the libsie bulk range getters and caching
 # the result in the per-channel block LRU. Subsequent index/range/collect
 # calls hit the cache and avoid any new ccalls.
-Base.collect(d::Dimension)            = _readdim(d)
-Base.getindex(d::Dimension, ::Colon)  = _readdim(d)
+Base.collect(d::LibSieDimension)            = _readdim(d)
+Base.getindex(d::LibSieDimension, ::Colon)  = _readdim(d)
 
 # Single-sample read. Translates the row index to (block_idx, row_in_block)
 # via the cached cumulative-row offsets (binary search on a small `Vector`),
 # then fetches the containing block from the cache (or decodes it once and
 # stores it).
-function Base.getindex(d::Dimension, i::Integer)
+function Base.getindex(d::LibSieDimension, i::Integer)
     i >= 1 || throw(BoundsError(d, i))
-    ch    = d.parent::Channel
+    ch    = d.parent::LibSieChannel
     file  = ch.parent::SieFile
     cache = _channel_cache(file, ch)
     Int(i) > cache.total_rows && throw(BoundsError(d, i))
@@ -88,12 +132,12 @@ end
 # such block is fetched through the cache (decoded once, then memoized), so
 # repeated `dim[a:b]` calls over the same neighborhood pay no further
 # decoding cost.
-function Base.getindex(d::Dimension, r::AbstractUnitRange{<:Integer})
+function Base.getindex(d::LibSieDimension, r::AbstractUnitRange{<:Integer})
     if isempty(r)
         return eltype(d) === Float64 ? Float64[] : Vector{UInt8}[]
     end
     first(r) >= 1 || throw(BoundsError(d, first(r)))
-    ch    = d.parent::Channel
+    ch    = d.parent::LibSieChannel
     file  = ch.parent::SieFile
     cache = _channel_cache(file, ch)
     Int(last(r)) > cache.total_rows && throw(BoundsError(d, last(r)))
@@ -122,14 +166,14 @@ function Base.getindex(d::Dimension, r::AbstractUnitRange{<:Integer})
 end
 
 # Iteration: materialize once with `collect` and walk the resulting vector.
-# Cheaper than per-element indexing (which reopens a spigot per call) and
-# avoids the bookkeeping of holding a long-lived spigot across `iterate`
-# boundaries.
-function Base.iterate(d::Dimension)
+# Cheaper than per-element indexing (which would touch the cache per call).
+# `VectorDimension` inherits the default AbstractArray iterate, which is
+# already a single array index per step — no override needed there.
+function Base.iterate(d::LibSieDimension)
     v = collect(d)
     return isempty(v) ? nothing : (v[1], (v, 2))
 end
-function Base.iterate(::Dimension, state)
+function Base.iterate(::LibSieDimension, state)
     v, i = state
     return i > length(v) ? nothing : (v[i], (v, i + 1))
 end

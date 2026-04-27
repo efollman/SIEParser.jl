@@ -40,7 +40,10 @@ end
 accessors as dot properties — `f.tests`, `f.tags`, `t.id`,
 `t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`,
 `ch.schema`, `ch.sr`, `dim.id`, `dim.tags`. There are no equivalent
-exported accessor functions; use the property syntax everywhere.
+accessor functions; use the property syntax everywhere. The type names
+themselves are unexported — qualify them as `SomatSIE.SieFile`,
+`SomatSIE.Channel`, etc. — but values returned by `opensie`,
+`f.tests`, `t.channels`, and `ch.dims` need no qualification.
 
 For sequential time-series channels, dimension `id == 1` is typically time and
 dimension `id == 2` is the engineering value — read each separately and pair
@@ -48,13 +51,19 @@ them in your own code.
 
 ## Concepts
 
+All types are unexported and accessed as `SomatSIE.<Type>` to avoid name
+clashes with `Base.Channel` (Tasks), `Test.Test` (the stdlib testing
+module), and any user-defined `SieFile`/`Tags`/`Dimension`. Only the
+verbs `opensie` and `findchannel` are exported.
+
 | Type | Purpose |
 |------|---------|
-| `SieFile` | An opened SIE file. Owns the underlying handle; `close` it (or use `opensie(path) do f ... end`). |
-| `SomatSIE.Test` | A test (acquisition session) within a file. Borrowed. |
-| `SomatSIE.Channel` | A data series. Borrowed. |
-| `SomatSIE.Dimension` | A single column/axis of a channel. Borrowed. |
+| `SomatSIE.SieFile` | An opened SIE file. Owns the underlying handle; `close` it (or use `opensie(path) do f ... end`). |
+| `SomatSIE.Test` | A test (acquisition session) within a file. |
+| `SomatSIE.Channel` | A data series. |
+| `SomatSIE.Dimension` | A single column/axis of a channel. |
 | `SomatSIE.Tags` | A `Dict{String, Union{String, Vector{UInt8}}}` of metadata returned by `x.tags`. |
+| `SomatSIE.SieError` | Exception type for libsie / file-open errors. |
 
 Tags are plain Julia dicts:
 
@@ -69,7 +78,8 @@ haskey(ts, "core:schema")
 
 ## API surface
 
-Core types: `SieFile`, `Tags`, `SieError`, plus the unexported
+Core types (all unexported — qualify with `SomatSIE.`):
+`SomatSIE.SieFile`, `SomatSIE.Tags`, `SomatSIE.SieError`,
 `SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`. `Tags` is a
 type alias for `Dict{String, Union{String, Vector{UInt8}}}`.
 
@@ -122,6 +132,64 @@ end
 
 Indexing (`dim[i]`, `dim[a:b]`) still goes through the per-channel block
 cache, so reading is incremental — only the blocks you touch are decoded.
+
+## Building tests, channels, and dimensions in memory
+
+`Test`, `Channel`, and `Dimension` are abstract types with two concrete
+subtypes each: a libsie-backed variant returned when reading a file, and
+a vector-backed variant you can construct from edited or synthetic data.
+Anywhere a function is typed `f(::SomatSIE.Test)`, `f(::SomatSIE.Channel)`,
+or `g(::SomatSIE.Dimension)`, either variant works.
+
+```julia
+using SomatSIE
+using SomatSIE: Test, Channel, Dimension, Tags
+
+# Build dimensions from any AbstractVector. Element type is inferred.
+t = Dimension(0.0:0.01:1.0;       id = 1, tags = Tags("core:units" => "s"))
+v = Dimension(sin.(2π .* (0:100) ./ 100); id = 2, tags = Tags("core:units" => "V"))
+
+# Bundle them into a channel.
+ch = Channel("synthetic_sine", [t, v];
+             id   = 1,
+             tags = Tags("core:sample_rate" => "100",
+                         "core:schema"      => "timhis"))
+
+ch.name              # "synthetic_sine"
+ch.sr                # UInt(100)
+ch.dims[2][1:5]      # works just like a libsie-backed dim
+collect(ch.dims[1])  # returns a Vector{Float64}
+
+# Bundle channels into a test.
+test = Test([ch]; id = 1, tags = Tags("operator" => "ef"))
+findchannel(test, "synthetic_sine") === ch   # true
+```
+
+This makes it easy to feed downsampled, filtered, or otherwise edited
+data into existing pipelines without changing their type signatures.
+
+### Snapshotting a file with `sieCollect`
+
+`sieCollect` materializes any libsie-backed value into its in-memory
+`Vector*` variant, recursively. The result is fully detached from the
+source `SieFile` and remains valid after the file is closed:
+
+```julia
+snapshot = opensie("file.sie") do f
+    sieCollect(f)        # Vector{VectorTest}
+end
+# `snapshot` is still usable here; the file handle is gone.
+
+# Per-level: works on a Test, Channel, or Dimension too.
+opensie("file.sie") do f
+    vt = sieCollect(first(f.tests))             # VectorTest
+    vc = sieCollect(first(first(f.tests).channels))  # VectorChannel
+    vd = sieCollect(first(first(first(f.tests).channels).dims))  # VectorDimension
+end
+```
+
+`sieCollect` is idempotent and zero-copy on already-in-memory values \u2014
+calling it on a `VectorChannel` returns the same object (`===`).
 
 ## Limitations
 

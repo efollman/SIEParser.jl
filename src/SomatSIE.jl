@@ -62,10 +62,18 @@ include("api/file.jl")
 include("api/output.jl")
 include("api/spigot.jl")
 include("api/cache.jl")
+include("api/collect.jl")
 
 # Public surface
-export SieFile, Tags, SieError,
-       opensie,
-       findchannel
+#
+# Types are intentionally NOT exported — access them as
+# `SomatSIE.SieFile`, `SomatSIE.Tags`, `SomatSIE.SieError`,
+# `SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`. This
+# avoids name collisions with `Base.Channel` (Tasks), `Test.Test` (the
+# stdlib testing module), and any user-defined `SieFile`/`Tags`/`Dimension`.
+# Only the verbs `opensie` and `findchannel` are exported.
+export opensie,
+       findchannel,
+       sieCollect
 
 end # module SomatSIE

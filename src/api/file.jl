@@ -108,7 +108,7 @@ function _test(sf::SieFile, i::Integer)
     h = _check_open(sf)
     1 <= i <= _ntests(sf) || throw(BoundsError(sf, i))
     p = L.sie_file_test(h, i - 1)
-    p == C_NULL ? throw(BoundsError(sf, i)) : Test(p, sf)
+    p == C_NULL ? throw(BoundsError(sf, i)) : LibSieTest(p, sf)
 end
 
 _tests(sf::SieFile) = [_test(sf, i) for i in 1:_ntests(sf)]

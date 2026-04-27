@@ -13,9 +13,9 @@ Always close with [`close`](@ref) or use the do-block form via
 mutable struct Spigot
     handle::Ptr{Cvoid}
     file::SieFile
-    channel::Channel
+    channel::LibSieChannel
 
-    function Spigot(file::SieFile, ch::Channel)
+    function Spigot(file::SieFile, ch::LibSieChannel)
         out = Ref{Ptr{Cvoid}}(C_NULL)
         _check(L.sie_spigot_attach(_check_open(file), ch.handle, out))
         s = new(out[], file, ch)
@@ -45,9 +45,9 @@ Base.isopen(s::Spigot) = s.handle != C_NULL
     spigot(file, channel) -> Spigot
     spigot(f, file, channel)
 """
-spigot(file::SieFile, ch::Channel) = Spigot(file, ch)
+spigot(file::SieFile, ch::LibSieChannel) = Spigot(file, ch)
 
-function spigot(f::Function, file::SieFile, ch::Channel)
+function spigot(f::Function, file::SieFile, ch::LibSieChannel)
     s = Spigot(file, ch)
     try
         return f(s)
@@ -98,8 +98,8 @@ Walks the channel's spigot once and pulls each block via the libsie bulk
 getters (`sie_output_get_float64_range` / `sie_output_get_raw_range`), so
 each block costs a single `ccall` instead of one per sample.
 """
-function _readdim(d::Dimension)
-    ch    = d.parent::Channel
+function _readdim(d::LibSieDimension)
+    ch    = d.parent::LibSieChannel
     file  = ch.parent::SieFile
     cache = _channel_cache(file, ch)
     cache.total_rows == 0 && return Float64[]
@@ -129,7 +129,7 @@ block rather than per sample, so cheap even for multi-million-row channels.
 Useful when constructing a time axis for a sequential time-history channel
 directly from `core:sample_rate` instead of reading dim-0.
 """
-numrows(file::SieFile, ch::Channel) = _channel_cache(file, ch).total_rows
+numrows(file::SieFile, ch::LibSieChannel) = _channel_cache(file, ch).total_rows
 
 Base.show(io::IO, s::Spigot) = print(io,
     "Spigot(channel=", _id(s.channel), isopen(s) ? "" : ", closed", ")")

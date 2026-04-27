@@ -1,6 +1,7 @@
 using Test
 using SomatSIE
 using SomatSIE: SieFile, Spigot, Tags, Output,
+                Channel, Dimension,
                 opensie, findchannel,
                 spigot,
                 next!, numrows, numdims, numblocks, block, coltype,
@@ -202,6 +203,184 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                     v = collect(first(c.dims))
                     @test v isa AbstractVector
                     @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
+                end
+            end
+        end
+    end
+
+    @testset "In-memory Channel / Dimension construction" begin
+        # Build a VectorDimension via the public Dimension(...) constructor.
+        d1 = Dimension([1.0, 2.0, 3.0, 4.0]; id = 1,
+                       tags = Tags("core:units" => "s"))
+        d2 = Dimension(Float32[10, 20, 30, 40]; id = 2,
+                       tags = Tags("core:units" => "V"))
+        # Subtype, parametric eltype, AbstractVector behaviour.
+        @test d1 isa SomatSIE.Dimension                # abstract supertype
+        @test d1 isa SomatSIE.VectorDimension{Float64}
+        @test d2 isa SomatSIE.VectorDimension{Float32}
+        @test eltype(d1) === Float64
+        @test length(d1) == 4
+        @test size(d1) == (4,)
+        @test d1[1] == 1.0
+        @test d1[2:3] == [2.0, 3.0]
+        @test collect(d1) == [1.0, 2.0, 3.0, 4.0]
+        @test sum(d1) == 10.0                          # iterates via AbstractArray
+        # Property accessors.
+        @test d1.id == 1
+        @test d1.tags["core:units"] == "s"
+
+        # Build a VectorChannel via the public Channel(...) constructor.
+        ch = Channel("synthetic", [d1, d2]; id = 7,
+                     tags = Tags("core:sample_rate" => "100",
+                                 "core:schema" => "timhis"))
+        @test ch isa SomatSIE.Channel                  # abstract supertype
+        @test ch isa SomatSIE.VectorChannel
+        @test ch.id == 7
+        @test ch.name == "synthetic"
+        @test length(ch.dims) == 2
+        @test ch.dims[1] === d1
+        @test ch.dims[2] === d2
+        @test ch.schema == "timhis"
+        @test ch.sr === UInt(100)
+        @test ch.tags["core:schema"] == "timhis"
+
+        # A function typed for `Channel`/`Dimension` can consume the
+        # synthetic objects without modification:
+        sample_at(c::SomatSIE.Channel, i::Integer) =
+            (c.dims[1][i], c.dims[2][i])
+        @test sample_at(ch, 3) == (3.0, 30.0f0)
+
+        # Reject non-AbstractDimension entries up-front.
+        @test_throws ArgumentError Channel("bad", [d1, [1.0, 2.0]])
+
+        # Empty defaults.
+        d3 = Dimension(Int[])
+        @test d3 isa SomatSIE.VectorDimension{Int}
+        @test isempty(d3)
+        @test d3.id == 1
+        @test d3.tags == Tags()
+    end
+
+    @testset "In-memory types are mutable" begin
+        vd = Dimension([1.0, 2.0, 3.0]; id = 1, tags = Tags("u" => "s"))
+        vd.id   = 7
+        vd.tags = Tags("u" => "ms")
+        vd.data = [10.0, 20.0]
+        @test vd.id == 7
+        @test vd.tags["u"] == "ms"
+        @test collect(vd) == [10.0, 20.0]
+        @test length(vd) == 2
+
+        vc = Channel("a", [vd]; id = 1)
+        vc.name = "b"
+        vc.id   = 2
+        vc.tags = Tags("core:schema" => "timhis")
+        vd2     = Dimension([0.0])
+        vc.dims = SomatSIE.AbstractDimension[vd, vd2]
+        @test vc.name == "b"
+        @test vc.id   == 2
+        @test vc.schema == "timhis"
+        @test length(vc.dims) == 2
+
+        vt = SomatSIE.Test([vc]; id = 1)
+        vt.id       = 9
+        vt.tags     = Tags("op" => "ef")
+        vt.channels = SomatSIE.AbstractChannel[vc]
+        @test vt.id == 9
+        @test vt.tags["op"] == "ef"
+        @test length(vt.channels) == 1
+    end
+
+    @testset "In-memory Test construction" begin
+        d1 = Dimension([0.0, 0.01, 0.02, 0.03]; id = 1)
+        d2 = Dimension([1.0, 2.0, 3.0, 4.0];   id = 2)
+        ch1 = Channel("ch_a", [d1, d2]; id = 1,
+                      tags = Tags("core:sample_rate" => "100"))
+        ch2 = Channel("ch_b", [Dimension(Float32[10, 20, 30])]; id = 2)
+
+        # Build a VectorTest via SomatSIE.Test(...).
+        t = SomatSIE.Test([ch1, ch2]; id = 5,
+                          tags = Tags("operator" => "ef"))
+        @test t isa SomatSIE.Test            # abstract supertype
+        @test t isa SomatSIE.VectorTest
+        @test t.id == 5
+        @test length(t.channels) == 2
+        @test t.channels[1] === ch1
+        @test t.channels[2] === ch2
+        @test t.tags["operator"] == "ef"
+
+        # `findchannel` works on any AbstractTest because it only uses
+        # `t.channels` and `c.name`.
+        @test findchannel(t, "ch_a") === ch1
+        @test findchannel(t, "ch_b") === ch2
+        @test findchannel(t, "missing") === nothing
+
+        # A function typed for `Test` consumes the synthetic test:
+        nrows(test::SomatSIE.Test) =
+            sum(length(first(c.dims)) for c in test.channels)
+        @test nrows(t) == 4 + 3
+
+        # Reject non-AbstractChannel entries up-front.
+        @test_throws ArgumentError SomatSIE.Test([ch1, "not a channel"])
+
+        # Empty defaults.
+        t0 = SomatSIE.Test(SomatSIE.AbstractChannel[])
+        @test t0 isa SomatSIE.VectorTest
+        @test isempty(t0.channels)
+        @test t0.id == 1
+        @test t0.tags == Tags()
+    end
+
+    @testset "sieCollect" begin
+        # Idempotent on already-in-memory values (zero-copy: `===`).
+        d  = Dimension([1.0, 2.0, 3.0]; id = 2, tags = Tags("u" => "V"))
+        ch = Channel("syn", [d]; id = 1)
+        tt = SomatSIE.Test([ch]; id = 1)
+        @test sieCollect(d)  === d
+        @test sieCollect(ch) === ch
+        @test sieCollect(tt) === tt
+
+        # Snapshot a real file: result must outlive the SieFile.
+        snapshot_tests = nothing
+        opensie(FILE_MIN) do f
+            snapshot_tests = sieCollect(f)
+            @test snapshot_tests isa Vector{SomatSIE.VectorTest}
+            @test length(snapshot_tests) == length(f.tests)
+
+            # Per-level collection.
+            t = first(f.tests)
+            vt = sieCollect(t)
+            @test vt isa SomatSIE.VectorTest
+            @test vt.id == t.id
+            @test vt.tags == t.tags
+            @test length(vt.channels) == length(t.channels)
+            @test all(c isa SomatSIE.VectorChannel for c in vt.channels)
+
+            c = first(t.channels)
+            vc = sieCollect(c)
+            @test vc isa SomatSIE.VectorChannel
+            @test vc.name == c.name
+            @test vc.id   == c.id
+            @test vc.tags == c.tags
+            @test length(vc.dims) == length(c.dims)
+            @test all(d isa SomatSIE.VectorDimension for d in vc.dims)
+
+            d0 = first(c.dims)
+            vd = sieCollect(d0)
+            @test vd isa SomatSIE.VectorDimension
+            @test vd.id   == d0.id
+            @test vd.tags == d0.tags
+            @test collect(vd) == collect(d0)
+            @test eltype(vd) === eltype(d0)
+        end
+
+        # `snapshot_tests` is detached \u2014 still usable after the file is closed.
+        @test snapshot_tests isa Vector{SomatSIE.VectorTest}
+        for vt in snapshot_tests
+            for vc in vt.channels
+                for vd in vc.dims
+                    v = collect(vd)
+                    @test v isa AbstractVector
                 end
             end
         end

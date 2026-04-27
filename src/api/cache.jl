@@ -30,7 +30,7 @@ mutable struct ChannelCache
     lru_max::Int
 end
 
-function ChannelCache(file::SieFile, ch::Channel;
+function ChannelCache(file::SieFile, ch::LibSieChannel;
                       lru_max::Integer = _BLOCK_LRU_DEFAULT)
     s = Spigot(file, ch)
     offsets = Int[0]
@@ -152,7 +152,7 @@ function _block_for(cache::ChannelCache, dimid::Int, block_idx::Int)
 end
 
 # Lazily build/lookup the cache for a channel. Refuses on a closed file.
-function _channel_cache(sf::SieFile, ch::Channel)
+function _channel_cache(sf::SieFile, ch::LibSieChannel)
     _check_open(sf)
     h = ch.handle
     cache = get(sf.caches, h, nothing)
