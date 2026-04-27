@@ -1,0 +1,5 @@
+abstract vector math ops need to return original type if possible, (currently dereferences to regular Vector) + maybe uneeded with this implemented but shorcut constructor that pulls props from already existing object and vector to create new could be useful.
+better structure / distincion for when things are reading from file/cache or loaded in memory? difficult problem to solve
+new method to eagerly load straight into memory? something linke loadsie(filepath)
+should channel be subtype of AbstractMatrix? would cause issues possibly with raw data and channel types that dont have similar vector lengths e.g. histogram. does AbstractMatrix handle sparse cases, does something else handle this?
+reaudit at some point there were maybe some legit issues.
