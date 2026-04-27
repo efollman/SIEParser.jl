@@ -83,6 +83,13 @@ end
 Base.collect(d::Dimension)            = _readdim(d)
 Base.getindex(d::Dimension, ::Colon)  = _readdim(d)
 
+# Conversion to a concrete Julia vector. `AbstractVector(dim)` and
+# `Vector(dim)` are aliases for `collect(dim)` — they materialize every
+# block into a typed `Vector{Float64}` or `Vector{Vector{UInt8}}`,
+# matching `eltype(dim)`.
+(::Type{AbstractVector})(d::Dimension) = _readdim(d)
+(::Type{Vector})(d::Dimension)         = _readdim(d)
+
 # Single-sample read. Translates the row index to (block_idx, row_in_block)
 # via the cached cumulative-row offsets (binary search on a small `Vector`),
 # then fetches the containing block from the cache (or decodes it once and
