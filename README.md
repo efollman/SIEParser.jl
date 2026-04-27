@@ -104,6 +104,25 @@ or unparseable). Both are shorthands over `ch.tags`.
 > `SomatSIE.Output`) so the public surface stays small. Prefer
 > `dim[i]` / `dim[a:b]` / `collect(dim)`.
 
+## Plotting and DataFrames
+
+`Dimension` is a proper `AbstractVector{T}` (with `T` probed at construction:
+`Float64` for engineering values, `Vector{UInt8}` for raw payloads), so it
+plugs into the rest of the ecosystem with no extra glue:
+
+```julia
+using SomatSIE, DataFrames, CairoMakie
+opensie("file.sie") do f
+    ch = first(first(f.tests).channels)
+    df = DataFrame(:t => ch.dims[1], :v => ch.dims[2])   # auto-collected
+    lines(ch.dims[1], ch.dims[2])                        # time vs. value
+    scatter(ch.dims[2])
+end
+```
+
+Indexing (`dim[i]`, `dim[a:b]`) still goes through the per-channel block
+cache, so reading is incremental — only the blocks you touch are decoded.
+
 ## Limitations
 
 The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however they are low level functions geared for appending blocks to a file stream, or removing channels from a file ect. — substantial work would have to be done to support writing a file from scratch, including writing the xml headers and decoders from scratch. Since the initial purpouse of this library is simply to be able to extract data from this arcane format, this functionality will remain unimplemented.

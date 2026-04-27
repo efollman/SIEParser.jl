@@ -42,10 +42,50 @@ end
 function _dimension(c::Channel, i::Integer)
     1 <= i <= _numdims(c) || throw(BoundsError(c, i))
     h = L.sie_channel_dimension(c.handle, i - 1)
-    h == C_NULL ? throw(BoundsError(c, i)) : Dimension(h, c)
+    h == C_NULL && throw(BoundsError(c, i))
+    T = _probe_dim_eltypes(c, _numdims(c))[i]
+    return Dimension{T}(h, c)
 end
 
-_dimensions(c::Channel) = [_dimension(c, i) for i in 1:_numdims(c)]
+function _dimensions(c::Channel)
+    n = _numdims(c)
+    types = _probe_dim_eltypes(c, n)
+    out = Vector{Dimension}(undef, n)
+    @inbounds for i in 1:n
+        h = L.sie_channel_dimension(c.handle, i - 1)
+        h == C_NULL && throw(BoundsError(c, i))
+        out[i] = Dimension{types[i]}(h, c)
+    end
+    return out
+end
+
+# Probe the element types of all dimensions of a channel by attaching a
+# transient spigot, reading the type tag of the first block, and freeing.
+# Empty channels (no blocks) fall back to `Float64` so that downstream
+# `Vector{Float64}` allocations remain well-defined.
+function _probe_dim_eltypes(c::Channel, n::Int)
+    file = c.parent::SieFile
+    types = fill(Float64, n)::Vector{DataType}
+    spig_ref = Ref{Ptr{Cvoid}}(C_NULL)
+    s = L.sie_spigot_attach(file.handle, c.handle, spig_ref)
+    s == L.SIE_OK || return types
+    sp = spig_ref[]
+    try
+        out_ref = Ref{Ptr{Cvoid}}(C_NULL)
+        s = L.sie_spigot_get(sp, out_ref)
+        s == L.SIE_OK || return types
+        outh = out_ref[]
+        @inbounds for i in 1:n
+            t = L.sie_output_type(outh, Csize_t(i - 1))
+            types[i] = t == L.SIE_OUTPUT_FLOAT64 ? Float64       :
+                       t == L.SIE_OUTPUT_RAW     ? Vector{UInt8} :
+                                                   Float64
+        end
+    finally
+        L.sie_spigot_free(sp)
+    end
+    return types
+end
 
 function Base.getproperty(c::Channel, sym::Symbol)
     sym === :id         && return _id(c)
