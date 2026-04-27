@@ -16,7 +16,7 @@
 # file. The cache is purely additive — libsie 0.3 is read-only, so blocks
 # never need to be invalidated.
 
-const _BLOCK_LRU_DEFAULT = 64
+const _BLOCK_LRU_DEFAULT = 1024
 
 mutable struct ChannelCache
     spigot::Spigot
@@ -99,12 +99,20 @@ function _decode_block(out::Output, dimid::Int, nr::Int, ct::Symbol)
 end
 
 # Touch an existing LRU entry: move the key to the most-recently-used end
-# and return the cached vector.
+# and return the cached vector. Scans `lru_order` from the back, since the
+# typical access pattern (sequential / locally clustered reads) hits a
+# recently-touched key.
 function _touch_lru!(cache::ChannelCache, key::Tuple{Int,Int})
-    idx = findfirst(==(key), cache.lru_order)
-    idx !== nothing && deleteat!(cache.lru_order, idx)
-    push!(cache.lru_order, key)
-    return cache.lru[key]
+    order = cache.lru_order
+    @inbounds for i in length(order):-1:1
+        if order[i] == key
+            i == length(order) && return cache.lru[key]
+            deleteat!(order, i)
+            push!(order, key)
+            return cache.lru[key]
+        end
+    end
+    return cache.lru[key]   # unreachable on a well-formed cache
 end
 
 # Insert a freshly decoded block, evicting the oldest entries if needed.

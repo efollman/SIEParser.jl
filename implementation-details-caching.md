@@ -70,7 +70,7 @@ cache must use `getfield(f, :caches)`.
 ## `ChannelCache`
 
 ```julia
-const _BLOCK_LRU_DEFAULT = 64
+const _BLOCK_LRU_DEFAULT = 1024
 
 mutable struct ChannelCache
     spigot::Spigot
@@ -121,7 +121,7 @@ calls `_decode_block` immediately, which does one bulk-getter ccall
 (`sie_output_get_float64_range` or `sie_output_get_raw_range`) into a
 freshly allocated `Vector{Float64}` or `Vector{Vector{UInt8}}`.
 
-Eviction is true-LRU and capped at `_BLOCK_LRU_DEFAULT = 64` entries:
+Eviction is true-LRU and capped at `_BLOCK_LRU_DEFAULT = 1024` entries:
 
 * `_touch_lru!(cache, key)` — on hit, removes the key from `lru_order`
   and re-pushes it to the end (most-recently-used).
