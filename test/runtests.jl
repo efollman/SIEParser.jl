@@ -331,25 +331,25 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
         @test t0.tags == Tags()
     end
 
-    @testset "sieCollect" begin
+    @testset "sieDetach" begin
         # Idempotent on already-in-memory values (zero-copy: `===`).
         d  = Dimension([1.0, 2.0, 3.0]; id = 2, tags = Tags("u" => "V"))
         ch = Channel("syn", [d]; id = 1)
         tt = SomatSIE.Test([ch]; id = 1)
-        @test sieCollect(d)  === d
-        @test sieCollect(ch) === ch
-        @test sieCollect(tt) === tt
+        @test sieDetach(d)  === d
+        @test sieDetach(ch) === ch
+        @test sieDetach(tt) === tt
 
         # Snapshot a real file: result must outlive the SieFile.
         snapshot_tests = nothing
         opensie(FILE_MIN) do f
-            snapshot_tests = sieCollect(f)
+            snapshot_tests = sieDetach(f)
             @test snapshot_tests isa Vector{SomatSIE.VectorTest}
             @test length(snapshot_tests) == length(f.tests)
 
             # Per-level collection.
             t = first(f.tests)
-            vt = sieCollect(t)
+            vt = sieDetach(t)
             @test vt isa SomatSIE.VectorTest
             @test vt.id == t.id
             @test vt.tags == t.tags
@@ -357,7 +357,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             @test all(c isa SomatSIE.VectorChannel for c in vt.channels)
 
             c = first(t.channels)
-            vc = sieCollect(c)
+            vc = sieDetach(c)
             @test vc isa SomatSIE.VectorChannel
             @test vc.name == c.name
             @test vc.id   == c.id
@@ -366,7 +366,7 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
             @test all(d isa SomatSIE.VectorDimension for d in vc.dims)
 
             d0 = first(c.dims)
-            vd = sieCollect(d0)
+            vd = sieDetach(d0)
             @test vd isa SomatSIE.VectorDimension
             @test vd.id   == d0.id
             @test vd.tags == d0.tags

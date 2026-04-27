@@ -19,6 +19,18 @@ Per-dimension data is accessed by indexing the [`Dimension`](@ref):
 (`Vector{Float64}` for engineering values, or `Vector{Vector{UInt8}}`
 for raw payloads such as CAN frames).
 
+# Caching vs. materializing
+Libsie-backed dimensions read through a per-channel block cache, so
+partial / random access on large files is cheap — only the touched
+blocks are decoded, and re-touching the same neighborhood is free. For
+substantial work on a channel's data (filtering, FFTs, repeated full
+passes), call `collect(dim)` once and operate on the resulting plain
+`Vector`, or use [`sieDetach`](@ref) to detach an entire `Test` /
+`Channel` / `SieFile` into the in-memory `Vector*` variants up front.
+Rule of thumb: small files or whole-channel work → `sieDetach`;
+large files with sparse access → leave the `SieFile` open and let
+the cache do its job.
+
 Tag values may be strings or arbitrary binary blobs — `x.tags` returns a
 `Dict{String, Union{String, Vector{UInt8}}}` ([`Tags`](@ref)).
 
@@ -74,6 +86,6 @@ include("api/collect.jl")
 # Only the verbs `opensie` and `findchannel` are exported.
 export opensie,
        findchannel,
-       sieCollect
+       sieDetach
 
 end # module SomatSIE

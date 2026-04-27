@@ -114,6 +114,56 @@ or unparseable). Both are shorthands over `ch.tags`.
 > `SomatSIE.Output`) so the public surface stays small. Prefer
 > `dim[i]` / `dim[a:b]` / `collect(dim)`.
 
+## Caching vs. materializing — when to use which
+
+Every libsie-backed `Dimension` reads through a per-`Channel` block
+cache: a persistent spigot is opened on first access and reused, decoded
+blocks are memoized in a small LRU keyed by `(block_idx, dim_id)`, and a
+cumulative-row offset table lets `dim[i]` and `dim[a:b]` jump straight
+to the containing block. The result is that **partial / random access
+on large files is cheap** — only the blocks you touch are decoded, and
+re-touching the same neighborhood costs nothing. This is the right tool
+for browsing, previewing, plotting a slice, or extracting a few channels
+out of a multi-gigabyte file.
+
+If you intend to do **substantial work on a dimension's data**
+(filtering, FFTs, statistics, repeated full passes), pull the data out
+of the cache once and operate on a plain `Vector` instead. Each cached
+read still pays a dictionary lookup, an LRU touch, and bounds checks
+per call; a `Vector` does none of that and inlines into tight loops.
+Two equivalent escape hatches:
+
+```julia
+opensie("file.sie") do f
+    ch = first(first(f.tests).channels)
+
+    # 1. Per dimension — cheapest, returns a typed Vector{Float64}
+    #    (or Vector{Vector{UInt8}} for raw columns).
+    v = collect(ch.dims[2])
+    # ... heavy work on `v` ...
+
+    # 2. Whole tree at once — detaches everything from the file so you
+    #    can keep working after the do-block returns.
+    snapshot = sieDetach(f)
+    # or
+    testSnap = sieDetach(f.tests[1])
+    # or
+    chSnap = sieDetach(f.tests[1].channels[1])
+    # or
+    dimSnap = sieDetach(f.tests[1].channels[1].dims[1])
+    # this is designed so only the information that is really needed can be loaded into memory
+    # avoiding unecissary work.
+end
+# `snapshot` is a Vector{VectorTest}; the file handle is gone but
+# every dim, channel, and test is still fully usable.
+```
+
+Rule of thumb: **small files or whole-channel processing → `sieDetach`
+/ `collect(dim)` once, then forget the file.** **Large files or sparse
+access → keep the `SieFile` open and let the cache do its job.** Both
+paths return identical values; the choice is purely about per-access
+overhead.
+
 ## Plotting and DataFrames
 
 `Dimension` is a proper `AbstractVector{T}` (with `T` probed at construction:
@@ -168,27 +218,27 @@ findchannel(test, "synthetic_sine") === ch   # true
 This makes it easy to feed downsampled, filtered, or otherwise edited
 data into existing pipelines without changing their type signatures.
 
-### Snapshotting a file with `sieCollect`
+### Snapshotting a file with `sieDetach`
 
-`sieCollect` materializes any libsie-backed value into its in-memory
+`sieDetach` materializes any libsie-backed value into its in-memory
 `Vector*` variant, recursively. The result is fully detached from the
 source `SieFile` and remains valid after the file is closed:
 
 ```julia
 snapshot = opensie("file.sie") do f
-    sieCollect(f)        # Vector{VectorTest}
+    sieDetach(f)        # Vector{VectorTest}
 end
 # `snapshot` is still usable here; the file handle is gone.
 
 # Per-level: works on a Test, Channel, or Dimension too.
 opensie("file.sie") do f
-    vt = sieCollect(first(f.tests))             # VectorTest
-    vc = sieCollect(first(first(f.tests).channels))  # VectorChannel
-    vd = sieCollect(first(first(first(f.tests).channels).dims))  # VectorDimension
+    vt = sieDetach(first(f.tests))             # VectorTest
+    vc = sieDetach(first(first(f.tests).channels))  # VectorChannel
+    vd = sieDetach(first(first(first(f.tests).channels).dims))  # VectorDimension
 end
 ```
 
-`sieCollect` is idempotent and zero-copy on already-in-memory values \u2014
+`sieDetach` is idempotent and zero-copy on already-in-memory values \u2014
 calling it on a `VectorChannel` returns the same object (`===`).
 
 ## Limitations
