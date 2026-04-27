@@ -12,10 +12,9 @@ materialized via `collect(dim)` (or `dim[:]`).
 
 > The libsie 0.3 ABI is **read-only**: there is no SIE writer.
 
-> Spigot / streaming / histogram functionality is implemented but kept
-> internal. It is reachable as `SomatSIE.spigot`, `SomatSIE.Stream`,
-> `SomatSIE.Histogram`, etc., for advanced use, but is not part of the
-> stable exported surface.
+> The `Spigot` / `Output` block-iteration layer is implemented but kept
+> internal. It is reachable as `SomatSIE.spigot` / `SomatSIE.Output` for
+> advanced use, but is not part of the stable exported surface.
 
 > Public accessors on `SieFile`, `Test`, `Channel`, and `Dimension` are
 > exposed as **dot properties** \u2014 `f.tests`, `t.channels`,
@@ -149,6 +148,29 @@ can have mixed numeric + raw dimensions.
 
 Channel-level tag dictionary.
 
+### `ch.schema -> Union{String, Vector{UInt8}, Nothing}`
+
+Convenience accessor for the `core:schema` tag, or `nothing` if the tag
+is absent. Equivalent to `get(ch.tags, "core:schema", nothing)`. The
+schema string identifies the channel's data shape (e.g. `"timhis"`,
+`"can_raw"`, `"msglog"`).
+
+### `ch.sr -> Union{UInt, Float64, Nothing}`
+
+Convenience accessor for the `core:sample_rate` tag, parsed as a number,
+or `nothing` if the tag is absent. Tries `UInt` first and falls back to
+`Float64` for non-integer rates; `Vector{UInt8}` tag values are decoded
+as UTF-8 before parsing. Returns `nothing` if the tag is present but
+unparseable.
+
+```julia
+for t in f.tests, ch in t.channels
+    ch.schema == "timhis" || continue
+    rate = ch.sr                        # UInt, Float64, or nothing
+    @show ch.name, rate
+end
+```
+
 ---
 
 ## `Dimension`
@@ -278,7 +300,6 @@ returned types (`f.tests`, `f.tags`, `t.id`, `t.channels`,
 > Per-element positional access is via vector indexing, e.g.
 > `f.tests[1]`, `f.tests[1].channels[1]`, `ch.dims[1]`.
 
-> Spigot, Output, Stream, and Histogram types and functions are kept
-> internal (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`,
-> …). Prefer `collect(dim)` / `dim[i]` / `dim[a:b]` for typical use; the
-> streaming layer is reserved for future optimization work.
+> The `Spigot` / `Output` block-iteration types are kept internal
+> (`SomatSIE.spigot`, `SomatSIE.Output`). Prefer `collect(dim)` /
+> `dim[i]` / `dim[a:b]` for typical use.

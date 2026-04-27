@@ -248,5 +248,3 @@ back to libsie.
   and the metadata isn't accessed in tight loops.
 * `Output` handles. They are invalidated by the next `next!` and so are
   never stored anywhere; only their decoded contents are.
-* `Histogram` and `Stream` paths are unchanged — they don't go through
-  `Dimension`.

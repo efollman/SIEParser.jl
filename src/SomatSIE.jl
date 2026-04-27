@@ -44,7 +44,24 @@ writer at this time.
 module SomatSIE
 
 include("ccalls.jl")
-include("api.jl")
+
+using .LibSIE
+const L = LibSIE
+
+# High-level Julia API for libsie.
+#
+# Provides Julia-idiomatic types backed by libsie's opaque handles plus
+# `open`/`close`, iteration, indexing, and `read` semantics that should feel
+# natural to Julia users.
+include("api/errors.jl")
+include("api/tags.jl")
+include("api/dimension.jl")
+include("api/channel.jl")
+include("api/test.jl")
+include("api/file.jl")
+include("api/output.jl")
+include("api/spigot.jl")
+include("api/cache.jl")
 
 # Public surface
 export SieFile, Tags, SieError,

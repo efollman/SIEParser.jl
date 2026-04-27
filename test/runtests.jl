@@ -1,12 +1,11 @@
 using Test
 using SomatSIE
-using SomatSIE: SieFile, Spigot, Stream, Tags, Output,
+using SomatSIE: SieFile, Spigot, Tags, Output,
                 opensie, findchannel,
                 spigot,
                 next!, numrows, numdims, numblocks, block, coltype,
                 getfloat64,
-                reset!,
-                add!, numgroups
+                reset!
 
 # Helpers
 ncodeunits_or_size(v::AbstractString) = ncodeunits(v)
@@ -204,22 +203,6 @@ const FILE_FLOAT = joinpath(DATA, "sie_float_conversions_20050908.sie")
                     @test v isa AbstractVector
                     @test eltype(v) === Float64 || eltype(v) === Vector{UInt8}
                 end
-            end
-        end
-    end
-
-    @testset "Stream incremental ingest" begin
-        if isfile(FILE_MIN)
-            bytes = read(FILE_MIN)
-            s = Stream()
-            try
-                # Feed in two halves
-                half = length(bytes) ÷ 2
-                @test add!(s, view(bytes, 1:half)) >= 0
-                @test add!(s, view(bytes, half+1:length(bytes))) >= 0
-                @test numgroups(s) >= 0
-            finally
-                close(s)
             end
         end
     end

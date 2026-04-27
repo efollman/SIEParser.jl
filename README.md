@@ -39,8 +39,8 @@ end
 `SieFile`, `Test`, `Channel`, and `Dimension` all expose their public
 accessors as dot properties — `f.tests`, `f.tags`, `t.id`,
 `t.channels`, `t.tags`, `ch.id`, `ch.name`, `ch.dims`, `ch.tags`,
-`dim.id`, `dim.tags`. There are no equivalent exported
-accessor functions; use the property syntax everywhere.
+`ch.schema`, `ch.sr`, `dim.id`, `dim.tags`. There are no equivalent
+exported accessor functions; use the property syntax everywhere.
 
 For sequential time-series channels, dimension `id == 1` is typically time and
 dimension `id == 2` is the engineering value — read each separately and pair
@@ -95,10 +95,14 @@ Identity: `x.id`; channels also have `ch.name`. All `id` properties
 0-based convention. For `dim.id`, 1 is typically time and 2 is value on
 sequential time-series channels.
 
-> Spigot, Output, Stream, and Histogram are intentionally kept internal
-> (`SomatSIE.spigot`, `SomatSIE.Stream`, `SomatSIE.Histogram`, …) so the
-> public surface stays small. Prefer `dim[i]` / `dim[a:b]` / `collect(dim)`;
-> the streaming layer is reserved for future optimization work.
+Channel convenience accessors: `ch.schema` returns the `core:schema`
+tag (or `nothing`), and `ch.sr` returns the `core:sample_rate` tag
+parsed as a `UInt` (falling back to `Float64`, or `nothing` if unset
+or unparseable). Both are shorthands over `ch.tags`.
+
+> Spigot and Output are kept internal (`SomatSIE.spigot`,
+> `SomatSIE.Output`) so the public surface stays small. Prefer
+> `dim[i]` / `dim[a:b]` / `collect(dim)`.
 
 ## Limitations
 
