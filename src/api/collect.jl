@@ -63,3 +63,7 @@ end
 # rather than a synthetic `SieFile` (we have no in-memory `SieFile`
 # subtype, and a SIE file is not a meaningful concept once detached).
 sieDetach(sf::SieFile) = VectorTest[sieDetach(t) for t in _tests(sf)]
+
+# snake_case alias for callers that prefer Julia's normal naming
+# convention. Identical behavior; both names are exported.
+const sie_detach = sieDetach

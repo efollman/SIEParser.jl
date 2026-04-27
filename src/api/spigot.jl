@@ -14,11 +14,16 @@ mutable struct Spigot
     handle::Ptr{Cvoid}
     file::SieFile
     channel::LibSieChannel
+    # Bumped on every `next!` and `reset!`. Each `Output` snapshots the
+    # value at the moment it was produced; subsequent accessors verify
+    # the spigot is still on the same generation, so use-after-invalidate
+    # raises a clear error instead of reading freed C memory.
+    gen::UInt64
 
     function Spigot(file::SieFile, ch::LibSieChannel)
         out = Ref{Ptr{Cvoid}}(C_NULL)
         _check(L.sie_spigot_attach(_check_open(file), ch.handle, out))
-        s = new(out[], file, ch)
+        s = new(out[], file, ch, UInt64(0))
         finalizer(_finalize_spigot, s)
         return s
     end
@@ -58,7 +63,7 @@ end
 
 numblocks(s::Spigot)     = Int(L.sie_spigot_num_blocks(s.handle))
 Base.position(s::Spigot) = Int(L.sie_spigot_tell(s.handle))
-reset!(s::Spigot)        = (L.sie_spigot_reset(s.handle); s)
+reset!(s::Spigot)        = (L.sie_spigot_reset(s.handle); s.gen += UInt64(1); s)
 
 """
     next!(s::Spigot) -> Output | nothing
@@ -70,7 +75,8 @@ function next!(s::Spigot)
     out = Ref{Ptr{Cvoid}}(C_NULL)
     _check(L.sie_spigot_get(s.handle, out))
     p = out[]
-    p == C_NULL ? nothing : Output(p, s)
+    s.gen += UInt64(1)
+    p == C_NULL ? nothing : Output(p, s, s.gen)
 end
 
 # Iteration: yields Output objects (each invalidated when the next is fetched)
@@ -102,8 +108,9 @@ function _readdim(d::LibSieDimension)
     ch    = d.parent::LibSieChannel
     file  = ch.parent::SieFile
     cache = _channel_cache(file, ch)
-    cache.total_rows == 0 && return Float64[]
     et    = eltype(d)
+    cache.total_rows == 0 &&
+        return et === Float64 ? Float64[] : Vector{UInt8}[]
     dimid = _id(d)
     result = et === Float64 ? Vector{Float64}(undef, cache.total_rows) :
                               Vector{Vector{UInt8}}(undef, cache.total_rows)

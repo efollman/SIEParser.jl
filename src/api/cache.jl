@@ -24,7 +24,6 @@ mutable struct ChannelCache
     total_rows::Int
     nblocks::Int
     next_block::Int           # 1-based: index that next!(spigot) will yield
-    eltype_cache::Dict{Int, DataType}              # dim_id => Float64 | Vector{UInt8}
     lru::Dict{Tuple{Int,Int}, Any}                 # (block_idx, dim_id) => Vector
     lru_order::Vector{Tuple{Int,Int}}              # oldest first; touch-on-read
     lru_max::Int
@@ -43,7 +42,6 @@ function ChannelCache(file::SieFile, ch::LibSieChannel;
     end
     reset!(s)
     return ChannelCache(s, offsets, offsets[end], nb, 1,
-        Dict{Int, DataType}(),
         Dict{Tuple{Int,Int}, Any}(),
         Tuple{Int,Int}[],
         Int(lru_max))
@@ -52,21 +50,36 @@ end
 # Advance the persistent spigot until `next!` has yielded block `target`,
 # returning that `Output`. The Output is only valid until the next `next!`,
 # so callers must decode immediately (see `_decode_block`).
+#
+# Invariant maintained by `_block_for`: callers never ask for the block
+# the spigot just yielded but did not decode \u2014 either the LRU has the
+# decoded vector cached, or (on eviction / first-touch) `_advance_to`
+# resets and replays from block 1. libsie has no peek, so without that
+# invariant we would have nothing to return.
 function _advance_to(cache::ChannelCache, target::Int)
+    target >= 1 || error("invalid block target $target (must be >= 1)")
     if target < cache.next_block
         reset!(cache.spigot)
         cache.next_block = 1
     end
-    out = nothing
+    local out::Output
     while cache.next_block <= target
-        out = next!(cache.spigot)
-        out === nothing && error("unexpected end of spigot at block $target")
+        o = next!(cache.spigot)
+        o === nothing && error("unexpected end of spigot at block $target")
+        out = o
         cache.next_block += 1
     end
     return out
 end
 
 # Decode a whole block for one dimension into a typed Julia vector.
+#
+# Synchronous contract: this function MUST run to completion without
+# yielding to other tasks. For raw columns it captures pointers handed
+# back by libsie via `unsafe_wrap` and then `copy`s them; those pointers
+# are only valid until the owning `Output` is reused (i.e. the next
+# `next!`/`reset!` on the spigot). Adding any awaitable / sleep / I/O
+# between the ccall and the copy loop would be a use-after-free.
 function _decode_block(out::Output, dimid::Int, nr::Int, ct::Symbol)
     d0      = Csize_t(dimid - 1)
     written = Ref{Csize_t}(0)
@@ -141,12 +154,6 @@ function _block_for(cache::ChannelCache, dimid::Int, block_idx::Int)
     out = _advance_to(cache, block_idx)
     nr  = numrows(out)
     ct  = coltype(out, dimid)
-    if !haskey(cache.eltype_cache, dimid)
-        cache.eltype_cache[dimid] =
-            ct === :float64 ? Float64           :
-            ct === :raw     ? Vector{UInt8}     :
-            error("dimension $dimid has no data type (:none)")
-    end
     data = _decode_block(out, dimid, nr, ct)
     return _store_lru!(cache, key, data)
 end

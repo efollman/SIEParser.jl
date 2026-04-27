@@ -64,11 +64,11 @@ function (::Type{AbstractChannel})(name::AbstractString,
     return VectorChannel(String(name), Int(id), tags, ds)
 end
 
-_id(c::LibSieChannel)       = Int(L.sie_channel_id(c.handle)) + 1
-_name(c::LibSieChannel)     = _ptrlen_to_string(L.sie_channel_name, c.handle)
-_numdims(c::LibSieChannel)  = Int(L.sie_channel_num_dims(c.handle))
-_tags(c::LibSieChannel)     = _build_tags(c.handle,
-    Int(L.sie_channel_num_tags(c.handle)), L.sie_channel_tag)
+_id(c::LibSieChannel)       = (_check_open(c.parent::SieFile); Int(L.sie_channel_id(c.handle)) + 1)
+_name(c::LibSieChannel)     = (_check_open(c.parent::SieFile); _ptrlen_to_string(L.sie_channel_name, c.handle))
+_numdims(c::LibSieChannel)  = (_check_open(c.parent::SieFile); Int(L.sie_channel_num_dims(c.handle)))
+_tags(c::LibSieChannel)     = (_check_open(c.parent::SieFile); _build_tags(c.handle,
+    Int(L.sie_channel_num_tags(c.handle)), L.sie_channel_tag))
 
 _id(c::VectorChannel)       = c.id
 _name(c::VectorChannel)     = c.name
@@ -91,6 +91,7 @@ function _sample_rate(c::AbstractChannel)
 end
 
 function _dimension(c::LibSieChannel, i::Integer)
+    _check_open(c.parent::SieFile)
     1 <= i <= _numdims(c) || throw(BoundsError(c, i))
     h = L.sie_channel_dimension(c.handle, i - 1)
     h == C_NULL && throw(BoundsError(c, i))
@@ -99,6 +100,7 @@ function _dimension(c::LibSieChannel, i::Integer)
 end
 
 function _dimensions(c::LibSieChannel)
+    _check_open(c.parent::SieFile)
     n = _numdims(c)
     types = _probe_dim_eltypes(c, n)
     out = Vector{AbstractDimension}(undef, n)
@@ -116,20 +118,26 @@ _dimensions(c::VectorChannel)             = c.dims
 
 # Probe the element types of all dimensions of a channel by attaching a
 # transient spigot, reading the type tag of the first block, and freeing.
-# Empty channels (no blocks) fall back to `Float64` so that downstream
-# `Vector{Float64}` allocations remain well-defined.
+# Empty channels (no blocks at all) fall back to `Float64` so that
+# downstream `Vector{Float64}` allocations remain well-defined. Real
+# libsie failures (attach/get errors) propagate as `SieError` rather
+# than being silently masked.
 function _probe_dim_eltypes(c::LibSieChannel, n::Int)
     file = c.parent::SieFile
     types = fill(Float64, n)::Vector{DataType}
     spig_ref = Ref{Ptr{Cvoid}}(C_NULL)
-    s = L.sie_spigot_attach(file.handle, c.handle, spig_ref)
-    s == L.SIE_OK || return types
+    _check(L.sie_spigot_attach(_check_open(file), c.handle, spig_ref))
     sp = spig_ref[]
     try
         out_ref = Ref{Ptr{Cvoid}}(C_NULL)
-        s = L.sie_spigot_get(sp, out_ref)
-        s == L.SIE_OK || return types
+        rc = L.sie_spigot_get(sp, out_ref)
+        # Stream-ended on a channel with no blocks: leave the Float64
+        # default in place (the dimensions are empty, so the eltype is
+        # immaterial to correctness).
+        rc == L.SIE_E_STREAM_ENDED && return types
+        _check(rc)
         outh = out_ref[]
+        outh == C_NULL && return types  # also treat NULL as end-of-stream
         @inbounds for i in 1:n
             t = L.sie_output_type(outh, Csize_t(i - 1))
             types[i] = t == L.SIE_OUTPUT_FLOAT64 ? Float64       :
@@ -162,3 +170,21 @@ Base.propertynames(::AbstractChannel, private::Bool = false) =
 Base.show(io::IO, c::AbstractChannel) =
     print(io, "Channel(id=", _id(c), ", name=", repr(_name(c)),
               ", ndims=", _numdims(c), ")")
+
+"""
+    length(ch::SomatSIE.Channel) -> Int
+
+Number of samples per dimension. For a [`LibSieChannel`](@ref) this
+consults the per-channel block cache (one `ccall` per block on first
+access, free thereafter). For a [`VectorChannel`](@ref) this is
+`length(first(ch.dims))` — 0 if the channel has no dimensions.
+
+Assumes every dimension of `ch` has the same length, which is the
+invariant libsie maintains for SIE channels and which `Channel(...)`
+construction does not enforce — mixed-length `VectorChannel`s will
+report the length of dim 1 only.
+"""
+Base.length(c::LibSieChannel) =
+    _channel_cache(c.parent::SieFile, c).total_rows
+Base.length(c::VectorChannel) =
+    isempty(c.dims) ? 0 : length(@inbounds c.dims[1])

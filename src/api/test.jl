@@ -62,16 +62,17 @@ function (::Type{AbstractTest})(channels::AbstractVector;
     return VectorTest(Int(id), tags, cs)
 end
 
-_id(t::LibSieTest)        = Int(L.sie_test_id(t.handle)) + 1
-_nchannels(t::LibSieTest) = Int(L.sie_test_num_channels(t.handle))
-_tags(t::LibSieTest)      = _build_tags(t.handle,
-    Int(L.sie_test_num_tags(t.handle)), L.sie_test_tag)
+_id(t::LibSieTest)        = (_check_open(t.parent::SieFile); Int(L.sie_test_id(t.handle)) + 1)
+_nchannels(t::LibSieTest) = (_check_open(t.parent::SieFile); Int(L.sie_test_num_channels(t.handle)))
+_tags(t::LibSieTest)      = (_check_open(t.parent::SieFile); _build_tags(t.handle,
+    Int(L.sie_test_num_tags(t.handle)), L.sie_test_tag))
 
 _id(t::VectorTest)        = t.id
 _nchannels(t::VectorTest) = length(t.channels)
 _tags(t::VectorTest)      = t.tags
 
 function _channel(t::LibSieTest, i::Integer)
+    _check_open(t.parent::SieFile)
     1 <= i <= _nchannels(t) || throw(BoundsError(t, i))
     h = L.sie_test_channel(t.handle, i - 1)
     h == C_NULL ? throw(BoundsError(t, i)) : LibSieChannel(h, t.parent)

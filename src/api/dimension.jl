@@ -60,9 +60,11 @@ function (::Type{AbstractDimension})(data::AbstractVector;
 end
 
 # Internal accessors — split per concrete type:
-_id(d::LibSieDimension)   = Int(L.sie_dimension_index(d.handle)) + 1
-_tags(d::LibSieDimension) = _build_tags(d.handle,
-    Int(L.sie_dimension_num_tags(d.handle)), L.sie_dimension_tag)
+_id(d::LibSieDimension)   = (_check_open((d.parent::LibSieChannel).parent::SieFile);
+    Int(L.sie_dimension_index(d.handle)) + 1)
+_tags(d::LibSieDimension) = (_check_open((d.parent::LibSieChannel).parent::SieFile);
+    _build_tags(d.handle,
+    Int(L.sie_dimension_num_tags(d.handle)), L.sie_dimension_tag))
 
 _id(d::VectorDimension)   = d.id
 _tags(d::VectorDimension) = d.tags
@@ -75,8 +77,8 @@ end
 function Base.getproperty(d::VectorDimension, sym::Symbol)
     return getfield(d, sym)   # id, tags, data are real fields
 end
-Base.propertynames(::AbstractDimension, private::Bool = false) =
-    private ? (:id, :tags) : (:id, :tags)
+Base.propertynames(d::AbstractDimension, private::Bool = false) =
+    private ? (fieldnames(typeof(d))..., :id, :tags) : (:id, :tags)
 
 Base.show(io::IO, d::AbstractDimension) =
     print(io, "Dimension{", eltype(d), "}(id=", _id(d), ", n=", length(d), ")")
@@ -105,6 +107,7 @@ Base.@propagate_inbounds Base.getindex(d::VectorDimension, i::Integer) = d.data[
 Base.size(d::LibSieDimension) =
     (_channel_cache(d.parent.parent::SieFile,
                     d.parent::LibSieChannel).total_rows,)
+Base.IndexStyle(::Type{<:LibSieDimension}) = IndexLinear()
 
 # Full materialization. Walks the channel via the persistent spigot,
 # decoding each block once via the libsie bulk range getters and caching
@@ -154,10 +157,13 @@ function Base.getindex(d::LibSieDimension, r::AbstractUnitRange{<:Integer})
         block = _block_for(cache, dimid, b)
         block_start0 = cache.offsets[b]
         block_end0   = cache.offsets[b + 1] - 1
+        # local_lo/local_hi are 0-based offsets within the block; copying
+        # uses 1-based indexing (block[local_lo + 1 + k]). Correct because
+        # each block boundary is enforced by the cache's offsets table.
         local_lo = max(lo0, block_start0) - block_start0
         local_hi = min(hi0, block_end0)   - block_start0
         n = local_hi - local_lo + 1
-        for k in 0:(n - 1)
+        @inbounds for k in 0:(n - 1)
             result[pos + k] = block[local_lo + 1 + k]
         end
         pos += n
@@ -165,15 +171,8 @@ function Base.getindex(d::LibSieDimension, r::AbstractUnitRange{<:Integer})
     return result
 end
 
-# Iteration: materialize once with `collect` and walk the resulting vector.
-# Cheaper than per-element indexing (which would touch the cache per call).
-# `VectorDimension` inherits the default AbstractArray iterate, which is
-# already a single array index per step — no override needed there.
-function Base.iterate(d::LibSieDimension)
-    v = collect(d)
-    return isempty(v) ? nothing : (v[1], (v, 2))
-end
-function Base.iterate(::LibSieDimension, state)
-    v, i = state
-    return i > length(v) ? nothing : (v[i], (v, i + 1))
-end
+# Iteration uses the default `AbstractArray` iterate, which calls
+# `getindex` per step. Each `getindex` hits the per-channel block cache,
+# so sequential traversal decodes each block once and then reuses it —
+# cheap, and crucially it does NOT eagerly materialize the entire
+# dimension before yielding the first element.

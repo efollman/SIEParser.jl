@@ -38,8 +38,10 @@ function _close_caches!(sf::SieFile)
     for (_, cache) in sf.caches
         try
             close(cache.spigot)
-        catch
-            # Best-effort: don't let a single bad spigot block cleanup.
+        catch err
+            # Best-effort: don't let a single bad spigot block cleanup,
+            # but surface the failure so it isn't silently swallowed.
+            @warn "SomatSIE: failed to close cached spigot during file cleanup" exception=(err, catch_backtrace())
         end
     end
     empty!(sf.caches)
@@ -98,7 +100,7 @@ function opensie(f::Function, path::AbstractString)
 end
 
 function _check_open(sf::SieFile)
-    sf.handle == C_NULL && error("SieFile is closed")
+    sf.handle == C_NULL && throw(SieError(-1, "SieFile is closed"))
     return sf.handle
 end
 

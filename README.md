@@ -78,6 +78,10 @@ haskey(ts, "core:schema")
 
 ## API surface
 
+A full reference — every public type, every dot-property, every
+function — lives in [JuliaAPI.md](JuliaAPI.md). The summary below
+covers the most common patterns.
+
 Core types (all unexported — qualify with `SomatSIE.`):
 `SomatSIE.SieFile`, `SomatSIE.Tags`, `SomatSIE.SieError`,
 `SomatSIE.Test`, `SomatSIE.Channel`, `SomatSIE.Dimension`. `Tags` is a
@@ -152,7 +156,7 @@ opensie("file.sie") do f
     # or
     dimSnap = sieDetach(f.tests[1].channels[1].dims[1])
     # this is designed so only the information that is really needed can be loaded into memory
-    # avoiding unecissary work.
+    # avoiding unnecessary work.
 end
 # `snapshot` is a Vector{VectorTest}; the file handle is gone but
 # every dim, channel, and test is still fully usable.
@@ -243,7 +247,7 @@ calling it on a `VectorChannel` returns the same object (`===`).
 
 ## Limitations
 
-The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however they are low level functions geared for appending blocks to a file stream, or removing channels from a file ect. — substantial work would have to be done to support writing a file from scratch, including writing the xml headers and decoders from scratch. Since the initial purpouse of this library is simply to be able to extract data from this arcane format, this functionality will remain unimplemented.
+The C ABI exposed by `libsie_jll` (v0.3) now includes writer functions, however they are low-level functions geared toward appending blocks to an existing file stream or removing channels — substantial work would be required to support writing a file from scratch, including emitting the XML headers and decoders. Since the initial purpose of this library is simply to extract data from this arcane format, that functionality remains unimplemented.
 
 ## Versioning
 

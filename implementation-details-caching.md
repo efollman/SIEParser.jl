@@ -78,7 +78,6 @@ mutable struct ChannelCache
     total_rows::Int
     nblocks::Int
     next_block::Int           # 1-based: index that next!(spigot) will yield
-    eltype_cache::Dict{Int, DataType}              # dim_id => Float64 | Vector{UInt8}
     lru::Dict{Tuple{Int,Int}, Any}                 # (block_idx, dim_id) => Vector
     lru_order::Vector{Tuple{Int,Int}}              # oldest first
     lru_max::Int
@@ -128,7 +127,7 @@ Eviction is true-LRU and capped at `_BLOCK_LRU_DEFAULT = 1024` entries:
 * `_store_lru!(cache, key, data)` — on miss, inserts the entry at the
   end and pops the oldest until `length(lru_order) <= lru_max`.
 
-64 was chosen as a reasonable default: large enough to swallow typical
+1024 was chosen as a reasonable default: large enough to swallow typical
 neighborhood/iteration patterns, small enough to bound memory even for
 multi-million-row files. The cap is a `const`, not a kwarg, by design —
 exposing a knob would lock in API surface for an internal optimization.
@@ -140,14 +139,13 @@ exposing a knob would lock in API surface for an internal optimization.
 Because `offsets` is small (one entry per block) and sorted, this is
 O(log nblocks) and allocation-free.
 
-### `eltype_cache`
+### Element type
 
-`Base.eltype(dim)` is called all over the place by Julia's iteration and
-broadcasting machinery, so it is memoized per `dim_id`. The first probe
-either reads a cached value or forces a decode of block 1 (which writes
-the eltype as a side effect inside `_block_for`). For empty channels we
-short-circuit to `Float64` so downstream `Vector{Float64}(undef, 0)`
-allocations are well-defined.
+`eltype(dim)` is fixed at `LibSieDimension{T}` construction time — the
+dimension's parametric `T` is set by `_probe_dim_eltypes` (a one-shot
+transient spigot that reads block 1's column types). For empty channels
+the probe falls back to `Float64` so downstream `Vector{Float64}(undef, 0)`
+allocations are well-defined. No per-cache memoization is needed.
 
 ---
 
@@ -188,7 +186,7 @@ through `_check_open` in `_channel_cache` and raise a `SieError`.
 ```julia
 Base.length(d)      = _channel_cache(d.parent.parent, d.parent).total_rows
 
-Base.eltype(d)      = consult cache.eltype_cache, else _block_for(cache, dimid, 1)
+Base.eltype(d)      = T from LibSieDimension{T} (probed at construction)
 
 d[i::Integer]       = block_idx, row = _locate_row(cache, i - 1)
                       _block_for(cache, dimid, block_idx)[row + 1]
@@ -211,7 +209,7 @@ The range path computes only the overlap with each touched block, so
 ## Cost model
 
 Let `B` be the number of blocks in a channel and `K` the LRU capacity
-(64).
+(`_BLOCK_LRU_DEFAULT`, currently 1024).
 
 | Operation                          | First call (cold) | Repeated call (hot) |
 |------------------------------------|-------------------|---------------------|
@@ -223,15 +221,18 @@ Let `B` be the number of blocks in a channel and `K` the LRU capacity
 | `collect(dim)` / `dim[:]`          | `B` block decodes | `B` LRU hits        |
 
 The `O(K)` term in the hit case comes from the linear scan in
-`_touch_lru!` (`findfirst` over `lru_order`). With `K = 64` this is
-negligible compared to a single ccall, and it keeps the data structures
-simple — no doubly-linked list bookkeeping needed.
+`_touch_lru!` (`findfirst` over `lru_order`). With `K ≈ 1024` this
+is still small compared to a single ccall (a few thousand tuple
+compares vs. one cross-language hop), and it keeps the data structures
+simple — no doubly-linked list bookkeeping needed. Replace with an
+O(1) structure (e.g. an `OrderedDict`-backed MRU queue) if profiling
+ever shows it on the hot path.
 
 ---
 
 ## Memory bound
 
-A single `ChannelCache` holds at most `K = 64` decoded blocks. For a
+A single `ChannelCache` holds at most `K = 1024` decoded blocks. For a
 typical timehistory channel that's a few MB; for a raw/CAN channel
 storing `Vector{UInt8}` per row it scales with the per-frame payload.
 The cache is per channel, so total memory is roughly

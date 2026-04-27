@@ -86,6 +86,7 @@ include("api/collect.jl")
 # Only the verbs `opensie` and `findchannel` are exported.
 export opensie,
        findchannel,
-       sieDetach
+       sieDetach,
+       sie_detach
 
 end # module SomatSIE
